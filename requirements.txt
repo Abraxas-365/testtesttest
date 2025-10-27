@@ -8,8 +8,9 @@ pydantic-settings==2.6.0
 # Database
 asyncpg==0.29.0
 
-# Google Cloud
+# Google Cloud & RAG
 google-cloud-aiplatform[agent_engines,adk]>=1.112.0
+vertexai>=1.60.0
 
 # Utilities
 python-dotenv==1.0.1

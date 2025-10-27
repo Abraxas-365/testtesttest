@@ -1,11 +1,12 @@
 """Dependency injection container for the application."""
 
 import os
+import asyncpg
 from typing import Optional
 
-from src.domain.ports import AgentRepository
+from src.domain.ports import AgentRepository, CorpusRepository
 from src.domain.services import AgentService
-from src.infrastructure.adapters.postgres import PostgresAgentRepository
+from src.infrastructure.adapters.postgres import PostgresAgentRepository, PostgresCorpusRepository
 from src.infrastructure.tools import ToolRegistry
 
 
@@ -20,6 +21,7 @@ class Container:
     def __init__(self):
         """Initialize the container."""
         self._repository: Optional[AgentRepository] = None
+        self._corpus_repository: Optional[CorpusRepository] = None
         self._tool_registry: Optional[ToolRegistry] = None
         self._agent_service: Optional[AgentService] = None
 
@@ -48,6 +50,38 @@ class Container:
             )
 
         return self._repository
+
+    async def init_corpus_repository(self) -> CorpusRepository:
+        """
+        Initialize and return the corpus repository.
+
+        Uses the same database connection as the agent repository.
+
+        Returns:
+            CorpusRepository instance
+        """
+        if self._corpus_repository is None:
+            # Get database configuration from environment variables
+            db_host = os.getenv("DB_HOST", "localhost")
+            db_port = int(os.getenv("DB_PORT", "5432"))
+            db_name = os.getenv("DB_NAME", "agents_db")
+            db_user = os.getenv("DB_USER", "postgres")
+            db_password = os.getenv("DB_PASSWORD", "postgres")
+
+            # For simplicity, create a new pool for corpus repository
+            # In production, you might want to share the pool
+            pool = await asyncpg.create_pool(
+                host=db_host,
+                port=db_port,
+                database=db_name,
+                user=db_user,
+                password=db_password,
+                min_size=5,
+                max_size=10,
+            )
+            self._corpus_repository = PostgresCorpusRepository(pool)
+
+        return self._corpus_repository
 
     def get_tool_registry(self) -> ToolRegistry:
         """
@@ -79,6 +113,8 @@ class Container:
         """Close all resources."""
         if self._repository and isinstance(self._repository, PostgresAgentRepository):
             await self._repository.close()
+        if self._corpus_repository and isinstance(self._corpus_repository, PostgresCorpusRepository):
+            await self._corpus_repository.pool.close()
 
 
 # Global container instance

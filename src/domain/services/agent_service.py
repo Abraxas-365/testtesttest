@@ -112,8 +112,12 @@ class AgentService:
             return None
 
         try:
-            # Get tools for the agent
-            tools = self.tool_registry.get_tools_for_configs(config.tools)
+            # Get tools for the agent (pass corpuses and agent_service for RAG/agent tools)
+            tools = self.tool_registry.get_tools_for_configs(
+                config.tools,
+                corpuses=config.corpuses,
+                agent_service=self
+            )
 
             # Get sub-agents if any
             sub_agents = []

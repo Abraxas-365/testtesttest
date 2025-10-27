@@ -5,7 +5,7 @@ from typing import Optional
 import asyncpg
 from asyncpg import Pool
 
-from src.domain.models import AgentConfig, ToolConfig, ModelConfig
+from src.domain.models import AgentConfig, ToolConfig, ModelConfig, CorpusConfig
 from src.domain.ports import AgentRepository
 
 
@@ -77,13 +77,15 @@ class PostgresAgentRepository(AgentRepository):
                 a.description,
                 a.enabled,
                 a.metadata,
+                a.agent_type,
+                a.area_type,
                 a.model_name,
                 a.temperature,
                 a.max_tokens,
                 a.top_p,
                 a.top_k,
                 COALESCE(
-                    json_agg(
+                    json_agg(DISTINCT
                         json_build_object(
                             'tool_id', t.tool_id,
                             'tool_name', t.tool_name,
@@ -97,12 +99,35 @@ class PostgresAgentRepository(AgentRepository):
                     '[]'
                 ) as tools,
                 COALESCE(
-                    array_agg(sa.sub_agent_id) FILTER (WHERE sa.sub_agent_id IS NOT NULL),
+                    json_agg(DISTINCT
+                        json_build_object(
+                            'corpus_id', c.corpus_id,
+                            'corpus_name', c.corpus_name,
+                            'display_name', c.display_name,
+                            'description', c.description,
+                            'vertex_corpus_name', c.vertex_corpus_name,
+                            'embedding_model', c.embedding_model,
+                            'vector_db_type', c.vector_db_type,
+                            'vector_db_config', c.vector_db_config,
+                            'document_count', c.document_count,
+                            'chunk_size', c.chunk_size,
+                            'chunk_overlap', c.chunk_overlap,
+                            'priority', ac.priority,
+                            'metadata', c.metadata,
+                            'enabled', c.enabled
+                        )
+                    ) FILTER (WHERE c.corpus_id IS NOT NULL),
+                    '[]'
+                ) as corpuses,
+                COALESCE(
+                    array_agg(DISTINCT sa.sub_agent_id) FILTER (WHERE sa.sub_agent_id IS NOT NULL),
                     ARRAY[]::text[]
                 ) as sub_agent_ids
             FROM agents a
             LEFT JOIN agent_tools at ON a.agent_id = at.agent_id
             LEFT JOIN tools t ON at.tool_id = t.tool_id
+            LEFT JOIN agent_corpuses ac ON a.agent_id = ac.agent_id
+            LEFT JOIN corpuses c ON ac.corpus_id = c.corpus_id
             LEFT JOIN agent_sub_agents sa ON a.agent_id = sa.parent_agent_id
             WHERE a.agent_id = $1
             GROUP BY a.agent_id
@@ -124,13 +149,15 @@ class PostgresAgentRepository(AgentRepository):
                 a.description,
                 a.enabled,
                 a.metadata,
+                a.agent_type,
+                a.area_type,
                 a.model_name,
                 a.temperature,
                 a.max_tokens,
                 a.top_p,
                 a.top_k,
                 COALESCE(
-                    json_agg(
+                    json_agg(DISTINCT
                         json_build_object(
                             'tool_id', t.tool_id,
                             'tool_name', t.tool_name,
@@ -144,12 +171,35 @@ class PostgresAgentRepository(AgentRepository):
                     '[]'
                 ) as tools,
                 COALESCE(
-                    array_agg(sa.sub_agent_id) FILTER (WHERE sa.sub_agent_id IS NOT NULL),
+                    json_agg(DISTINCT
+                        json_build_object(
+                            'corpus_id', c.corpus_id,
+                            'corpus_name', c.corpus_name,
+                            'display_name', c.display_name,
+                            'description', c.description,
+                            'vertex_corpus_name', c.vertex_corpus_name,
+                            'embedding_model', c.embedding_model,
+                            'vector_db_type', c.vector_db_type,
+                            'vector_db_config', c.vector_db_config,
+                            'document_count', c.document_count,
+                            'chunk_size', c.chunk_size,
+                            'chunk_overlap', c.chunk_overlap,
+                            'priority', ac.priority,
+                            'metadata', c.metadata,
+                            'enabled', c.enabled
+                        )
+                    ) FILTER (WHERE c.corpus_id IS NOT NULL),
+                    '[]'
+                ) as corpuses,
+                COALESCE(
+                    array_agg(DISTINCT sa.sub_agent_id) FILTER (WHERE sa.sub_agent_id IS NOT NULL),
                     ARRAY[]::text[]
                 ) as sub_agent_ids
             FROM agents a
             LEFT JOIN agent_tools at ON a.agent_id = at.agent_id
             LEFT JOIN tools t ON at.tool_id = t.tool_id
+            LEFT JOIN agent_corpuses ac ON a.agent_id = ac.agent_id
+            LEFT JOIN corpuses c ON ac.corpus_id = c.corpus_id
             LEFT JOIN agent_sub_agents sa ON a.agent_id = sa.parent_agent_id
             WHERE a.name = $1
             GROUP BY a.agent_id
@@ -171,13 +221,15 @@ class PostgresAgentRepository(AgentRepository):
                 a.description,
                 a.enabled,
                 a.metadata,
+                a.agent_type,
+                a.area_type,
                 a.model_name,
                 a.temperature,
                 a.max_tokens,
                 a.top_p,
                 a.top_k,
                 COALESCE(
-                    json_agg(
+                    json_agg(DISTINCT
                         json_build_object(
                             'tool_id', t.tool_id,
                             'tool_name', t.tool_name,
@@ -191,12 +243,35 @@ class PostgresAgentRepository(AgentRepository):
                     '[]'
                 ) as tools,
                 COALESCE(
-                    array_agg(sa.sub_agent_id) FILTER (WHERE sa.sub_agent_id IS NOT NULL),
+                    json_agg(DISTINCT
+                        json_build_object(
+                            'corpus_id', c.corpus_id,
+                            'corpus_name', c.corpus_name,
+                            'display_name', c.display_name,
+                            'description', c.description,
+                            'vertex_corpus_name', c.vertex_corpus_name,
+                            'embedding_model', c.embedding_model,
+                            'vector_db_type', c.vector_db_type,
+                            'vector_db_config', c.vector_db_config,
+                            'document_count', c.document_count,
+                            'chunk_size', c.chunk_size,
+                            'chunk_overlap', c.chunk_overlap,
+                            'priority', ac.priority,
+                            'metadata', c.metadata,
+                            'enabled', c.enabled
+                        )
+                    ) FILTER (WHERE c.corpus_id IS NOT NULL),
+                    '[]'
+                ) as corpuses,
+                COALESCE(
+                    array_agg(DISTINCT sa.sub_agent_id) FILTER (WHERE sa.sub_agent_id IS NOT NULL),
                     ARRAY[]::text[]
                 ) as sub_agent_ids
             FROM agents a
             LEFT JOIN agent_tools at ON a.agent_id = at.agent_id
             LEFT JOIN tools t ON at.tool_id = t.tool_id
+            LEFT JOIN agent_corpuses ac ON a.agent_id = ac.agent_id
+            LEFT JOIN corpuses c ON ac.corpus_id = c.corpus_id
             LEFT JOIN agent_sub_agents sa ON a.agent_id = sa.parent_agent_id
         """
 
@@ -256,15 +331,18 @@ class PostgresAgentRepository(AgentRepository):
         query = """
             INSERT INTO agents (
                 agent_id, name, instruction, description, enabled, metadata,
+                agent_type, area_type,
                 model_name, temperature, max_tokens, top_p, top_k
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
             ON CONFLICT (agent_id) DO UPDATE SET
                 name = EXCLUDED.name,
                 instruction = EXCLUDED.instruction,
                 description = EXCLUDED.description,
                 enabled = EXCLUDED.enabled,
                 metadata = EXCLUDED.metadata,
+                agent_type = EXCLUDED.agent_type,
+                area_type = EXCLUDED.area_type,
                 model_name = EXCLUDED.model_name,
                 temperature = EXCLUDED.temperature,
                 max_tokens = EXCLUDED.max_tokens,
@@ -284,6 +362,8 @@ class PostgresAgentRepository(AgentRepository):
                     agent.description,
                     agent.enabled,
                     json.dumps(agent.metadata),
+                    agent.agent_type,
+                    agent.area_type,
                     agent.model.model_name,
                     agent.model.temperature,
                     agent.model.max_tokens,
@@ -301,6 +381,19 @@ class PostgresAgentRepository(AgentRepository):
                     await conn.executemany(
                         "INSERT INTO agent_tools (agent_id, tool_id) VALUES ($1, $2)",
                         [(agent.agent_id, tool.tool_id) for tool in agent.tools],
+                    )
+
+                # Delete existing corpus associations
+                await conn.execute(
+                    "DELETE FROM agent_corpuses WHERE agent_id = $1",
+                    agent.agent_id,
+                )
+
+                # Insert new corpus associations
+                if agent.corpuses:
+                    await conn.executemany(
+                        "INSERT INTO agent_corpuses (agent_id, corpus_id, priority) VALUES ($1, $2, $3)",
+                        [(agent.agent_id, corpus.corpus_id, corpus.priority) for corpus in agent.corpuses],
                     )
 
                 # Delete existing sub-agent associations
@@ -352,6 +445,29 @@ class PostgresAgentRepository(AgentRepository):
                 for t in tools_data
             ]
 
+        corpuses = []
+        if row.get("corpuses"):
+            corpuses_data = row["corpuses"] if isinstance(row["corpuses"], list) else json.loads(row["corpuses"])
+            corpuses = [
+                CorpusConfig(
+                    corpus_id=c["corpus_id"],
+                    corpus_name=c["corpus_name"],
+                    display_name=c["display_name"],
+                    description=c.get("description"),
+                    vertex_corpus_name=c.get("vertex_corpus_name"),
+                    embedding_model=c.get("embedding_model", "text-embedding-005"),
+                    vector_db_type=c.get("vector_db_type", "vertex_rag"),
+                    vector_db_config=c.get("vector_db_config", {}),
+                    document_count=c.get("document_count", 0),
+                    chunk_size=c.get("chunk_size", 1000),
+                    chunk_overlap=c.get("chunk_overlap", 200),
+                    priority=c.get("priority", 1),
+                    metadata=c.get("metadata", {}),
+                    enabled=c.get("enabled", True),
+                )
+                for c in corpuses_data
+            ]
+
         metadata = row["metadata"]
         if isinstance(metadata, str):
             metadata = json.loads(metadata)
@@ -362,7 +478,10 @@ class PostgresAgentRepository(AgentRepository):
             model=model_config,
             instruction=row["instruction"],
             description=row["description"],
+            agent_type=row.get("agent_type", "assistant"),
+            area_type=row.get("area_type", "general"),
             tools=tools,
+            corpuses=corpuses,
             sub_agent_ids=row["sub_agent_ids"] or [],
             enabled=row["enabled"],
             metadata=metadata or {},

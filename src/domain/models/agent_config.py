@@ -14,6 +14,37 @@ class ModelType(str, Enum):
     GEMINI_1_5_FLASH = "gemini-1.5-flash"
 
 
+class AgentType(str, Enum):
+    """Agent types."""
+    ASSISTANT = "assistant"
+    COORDINATOR = "coordinator"
+    SPECIALIST = "specialist"
+    RAG = "rag"
+    TOOL = "tool"
+
+
+class AreaType(str, Enum):
+    """Agent area/domain types."""
+    GENERAL = "general"
+    MARKETING = "marketing"
+    LEGAL = "legal"
+    DEVELOPER = "developer"
+    OPERATIONS = "operations"
+    SALES = "sales"
+    CUSTOMER_SUPPORT = "customer_support"
+    FINANCE = "finance"
+    HR = "hr"
+    DATA_ANALYSIS = "data_analysis"
+
+
+class VectorDBType(str, Enum):
+    """Supported vector database types."""
+    VERTEX_RAG = "vertex_rag"
+    QDRANT = "qdrant"
+    PINECONE = "pinecone"
+    WEAVIATE = "weaviate"
+
+
 @dataclass(frozen=True)
 class ModelConfig:
     """Configuration for the AI model."""
@@ -33,12 +64,41 @@ class ModelConfig:
 
 
 @dataclass(frozen=True)
+class CorpusConfig:
+    """Configuration for a RAG corpus."""
+
+    corpus_id: str
+    corpus_name: str
+    display_name: str
+    description: Optional[str] = None
+    vertex_corpus_name: Optional[str] = None
+    embedding_model: str = "text-embedding-005"
+    vector_db_type: str = "vertex_rag"
+    vector_db_config: dict[str, Any] = field(default_factory=dict)
+    document_count: int = 0
+    chunk_size: int = 1000
+    chunk_overlap: int = 200
+    priority: int = 1  # Priority when assigned to an agent
+    metadata: dict[str, Any] = field(default_factory=dict)
+    enabled: bool = True
+
+    def __post_init__(self):
+        """Validate corpus configuration."""
+        if not self.corpus_name:
+            raise ValueError("Corpus name cannot be empty")
+        if self.chunk_size <= 0:
+            raise ValueError("chunk_size must be positive")
+        if self.chunk_overlap < 0:
+            raise ValueError("chunk_overlap cannot be negative")
+
+
+@dataclass(frozen=True)
 class ToolConfig:
     """Configuration for an agent tool."""
 
     tool_id: str
     tool_name: str
-    tool_type: str  # 'function', 'builtin', 'third_party'
+    tool_type: str  # 'function', 'builtin', 'third_party', 'rag', 'agent'
     function_name: Optional[str] = None  # For function tools
     parameters: dict[str, Any] = field(default_factory=dict)
     description: Optional[str] = None
@@ -46,8 +106,9 @@ class ToolConfig:
 
     def __post_init__(self):
         """Validate tool configuration."""
-        if self.tool_type not in ['function', 'builtin', 'third_party']:
-            raise ValueError("tool_type must be 'function', 'builtin', or 'third_party'")
+        valid_types = ['function', 'builtin', 'third_party', 'rag', 'agent']
+        if self.tool_type not in valid_types:
+            raise ValueError(f"tool_type must be one of {valid_types}")
 
 
 @dataclass(frozen=True)
@@ -59,7 +120,10 @@ class AgentConfig:
     model: ModelConfig
     instruction: str
     description: str
+    agent_type: str = "assistant"
+    area_type: str = "general"
     tools: list[ToolConfig] = field(default_factory=list)
+    corpuses: list[CorpusConfig] = field(default_factory=list)
     sub_agent_ids: list[str] = field(default_factory=list)
     enabled: bool = True
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -70,3 +134,13 @@ class AgentConfig:
             raise ValueError("Agent name cannot be empty")
         if not self.instruction:
             raise ValueError("Agent instruction cannot be empty")
+
+        # Validate agent_type
+        valid_agent_types = [t.value for t in AgentType]
+        if self.agent_type not in valid_agent_types:
+            raise ValueError(f"agent_type must be one of {valid_agent_types}")
+
+        # Validate area_type
+        valid_area_types = [t.value for t in AreaType]
+        if self.area_type not in valid_area_types:
+            raise ValueError(f"area_type must be one of {valid_area_types}")
