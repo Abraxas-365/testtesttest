@@ -2,6 +2,7 @@
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
+from typing import Optional
 
 from src.application.di import get_container
 
@@ -14,13 +15,17 @@ class InvokeRequest(BaseModel):
     agent_id: str = None
     agent_name: str = None
     prompt: str
+    user_id: str = "default_user"
+    session_id: Optional[str] = None
+    persist_session: bool = False  # Enable to save conversation history
 
 
 class InvokeResponse(BaseModel):
     """Response model for agent invocation."""
     response: str
-    agent_id: str = None
-    agent_name: str = None
+    agent_id: Optional[str] = None
+    agent_name: Optional[str] = None
+    session_id: Optional[str] = None
 
 
 class AgentInfo(BaseModel):
@@ -44,6 +49,7 @@ async def invoke_agent(request: InvokeRequest):
     Invoke an agent with a prompt.
 
     Either agent_id or agent_name must be provided.
+    Set persist_session=true to save conversation history.
     """
     if not request.agent_id and not request.agent_name:
         raise HTTPException(
@@ -58,20 +64,28 @@ async def invoke_agent(request: InvokeRequest):
         if request.agent_id:
             response = await agent_service.invoke_agent(
                 request.agent_id,
-                request.prompt
+                request.prompt,
+                user_id=request.user_id,
+                session_id=request.session_id,
+                persist_session=request.persist_session
             )
             return InvokeResponse(
                 response=response,
-                agent_id=request.agent_id
+                agent_id=request.agent_id,
+                session_id=request.session_id
             )
         else:
             response = await agent_service.invoke_agent_by_name(
                 request.agent_name,
-                request.prompt
+                request.prompt,
+                user_id=request.user_id,
+                session_id=request.session_id,
+                persist_session=request.persist_session
             )
             return InvokeResponse(
                 response=response,
-                agent_name=request.agent_name
+                agent_name=request.agent_name,
+                session_id=request.session_id
             )
 
     except ValueError as e:

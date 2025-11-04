@@ -1,6 +1,6 @@
 """Agent service for creating and managing ADK agents."""
 
-from typing import Optional
+from typing import Optional, Any
 from google.adk.agents import Agent, LlmAgent
 from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
@@ -20,17 +20,24 @@ class AgentService:
     Google ADK Agent instances.
     """
 
-    def __init__(self, repository: AgentRepository, tool_registry: ToolRegistry):
+    def __init__(
+        self,
+        repository: AgentRepository,
+        tool_registry: ToolRegistry,
+        session_service: Optional[Any] = None
+    ):
         """
         Initialize the agent service.
 
         Args:
             repository: The agent repository (port interface)
             tool_registry: The tool registry for resolving tools
+            session_service: Optional session service (PostgreSQL or InMemory)
         """
         self.repository = repository
         self.tool_registry = tool_registry
         self._agent_cache: dict[str, Agent] = {}
+        self.persistent_session_service = session_service  # For database sessions
 
     async def get_agent(self, agent_id: str, use_cache: bool = True) -> Optional[Agent]:
         """
@@ -209,7 +216,7 @@ class AgentService:
             agent_id: The agent ID
             agent: The agent instance
             prompt: The prompt to send
-            **kwargs: Additional arguments (user_id, session_id)
+            **kwargs: Additional arguments (user_id, session_id, persist_session)
 
         Returns:
             The agent's response as a string
@@ -219,24 +226,30 @@ class AgentService:
         # Extract user and session info
         user_id = kwargs.get("user_id", "default_user")
         session_id = kwargs.get("session_id")
+        persist_session = kwargs.get("persist_session", False)
 
-        # Generate unique session ID for each request
+        # Generate unique session ID for each request if not provided
         if not session_id:
             session_id = f"sess_{uuid.uuid4().hex[:12]}"
 
         app_name = f"agent_{agent_id}"
 
-        # Create session service for this invocation
-        session_service = InMemorySessionService()
+        # Choose session service: persistent (database) or ephemeral (in-memory)
+        if persist_session and self.persistent_session_service:
+            session_service = self.persistent_session_service
+        else:
+            # Create ephemeral session service for this invocation only
+            session_service = InMemorySessionService()
 
         # Create the session
         session_service.create_session(
             app_name=app_name,
             user_id=user_id,
-            session_id=session_id
+            session_id=session_id,
+            agent_id=agent_id
         )
 
-        # Create a fresh runner with its own session service
+        # Create a fresh runner
         runner = Runner(
             agent=agent,
             app_name=app_name,
@@ -265,6 +278,18 @@ class AgentService:
                                 response_text += part.text
         except Exception as e:
             raise RuntimeError(f"Error invoking agent: {str(e)}")
+
+        # If using persistent sessions, save the response
+        if persist_session and self.persistent_session_service:
+            try:
+                await self.persistent_session_service.save_message_async(
+                    session_id=session_id,
+                    role="agent",
+                    content=response_text,
+                    model_used=agent.model if hasattr(agent, 'model') else None
+                )
+            except Exception as e:
+                print(f"Warning: Could not save response to database: {e}")
 
         return response_text if response_text else "No response generated"
 

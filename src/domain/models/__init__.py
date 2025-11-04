@@ -7,6 +7,12 @@ from .agent_config import (
     AreaType,
     VectorDBType,
 )
+from .session_models import (
+    Session,
+    Message,
+    SessionStatus,
+    MessageRole,
+)
 
 __all__ = [
     "AgentConfig",
@@ -16,4 +22,8 @@ __all__ = [
     "AgentType",
     "AreaType",
     "VectorDBType",
+    "Session",
+    "Message",
+    "SessionStatus",
+    "MessageRole",
 ]
