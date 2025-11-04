@@ -2,6 +2,9 @@
 
 from typing import Optional
 from google.adk.agents import Agent, LlmAgent
+from google.adk.runners import Runner
+from google.adk.sessions import InMemorySessionService
+from google.genai import types
 
 from src.domain.models import AgentConfig
 from src.domain.ports import AgentRepository
@@ -28,6 +31,10 @@ class AgentService:
         self.repository = repository
         self.tool_registry = tool_registry
         self._agent_cache: dict[str, Agent] = {}
+        self._runner_cache: dict[str, Runner] = {}
+        
+        # Initialize session service for managing agent conversations
+        self.session_service = InMemorySessionService()
 
     async def get_agent(self, agent_id: str, use_cache: bool = True) -> Optional[Agent]:
         """
@@ -154,6 +161,26 @@ class AgentService:
             print(f"Error creating agent {config.name}: {e}")
             return None
 
+    def _get_runner(self, agent_id: str, agent: Agent) -> Runner:
+        """
+        Get or create a runner for the agent.
+
+        Args:
+            agent_id: The unique identifier of the agent
+            agent: The agent instance
+
+        Returns:
+            Runner instance for the agent
+        """
+        if agent_id not in self._runner_cache:
+            runner = Runner(
+                agent=agent,
+                app_name=f"agent_{agent_id}",
+                session_service=self.session_service
+            )
+            self._runner_cache[agent_id] = runner
+        return self._runner_cache[agent_id]
+
     async def reload_agent(self, agent_id: str) -> Optional[Agent]:
         """
         Reload an agent from the database, bypassing cache.
@@ -167,12 +194,17 @@ class AgentService:
         # Remove from cache if present
         if agent_id in self._agent_cache:
             del self._agent_cache[agent_id]
+        
+        # Remove runner from cache too
+        if agent_id in self._runner_cache:
+            del self._runner_cache[agent_id]
 
         return await self.get_agent(agent_id, use_cache=False)
 
     def clear_cache(self):
-        """Clear the agent cache."""
+        """Clear the agent and runner caches."""
         self._agent_cache.clear()
+        self._runner_cache.clear()
 
     async def invoke_agent(
         self, agent_id: str, prompt: str, **kwargs
@@ -183,7 +215,7 @@ class AgentService:
         Args:
             agent_id: The unique identifier of the agent
             prompt: The prompt to send to the agent
-            **kwargs: Additional arguments to pass to the agent
+            **kwargs: Additional arguments (user_id, session_id, etc.)
 
         Returns:
             The agent's response as a string
@@ -192,10 +224,52 @@ class AgentService:
         if not agent:
             raise ValueError(f"Agent {agent_id} not found")
 
-        # Invoke the agent (ADK agents can be called directly)
-        response = agent(prompt, **kwargs)
+        # Get or create runner for this agent
+        runner = self._get_runner(agent_id, agent)
+        
+        # Extract user and session info
+        user_id = kwargs.get("user_id", "default_user")
+        session_id = kwargs.get("session_id", f"session_{agent_id}")
+        
+        # Get or create session
+        try:
+            session = self.session_service.get_session(
+                app_name=f"agent_{agent_id}",
+                user_id=user_id,
+                session_id=session_id
+            )
+        except:
+            # If session doesn't exist, create it
+            session = self.session_service.create_session(
+                app_name=f"agent_{agent_id}",
+                user_id=user_id,
+                session_id=session_id
+            )
 
-        return response
+        # Create message content in the format ADK expects
+        message = types.Content(
+            role="user",
+            parts=[types.Part(text=prompt)]
+        )
+
+        # Run agent and collect response
+        response_text = ""
+        try:
+            async for event in runner.run_async(
+                user_id=user_id,
+                session_id=session_id,
+                new_message=message
+            ):
+                # Check if this is the final response
+                if event.is_final_response() and event.content:
+                    if event.content.parts:
+                        for part in event.content.parts:
+                            if hasattr(part, 'text') and part.text:
+                                response_text += part.text
+        except Exception as e:
+            raise RuntimeError(f"Error running agent {agent_id}: {str(e)}")
+
+        return response_text
 
     async def invoke_agent_by_name(
         self, name: str, prompt: str, **kwargs
@@ -206,15 +280,15 @@ class AgentService:
         Args:
             name: The name of the agent
             prompt: The prompt to send to the agent
-            **kwargs: Additional arguments to pass to the agent
+            **kwargs: Additional arguments (user_id, session_id, etc.)
 
         Returns:
             The agent's response as a string
         """
-        agent = await self.get_agent_by_name(name)
-        if not agent:
-            raise ValueError(f"Agent {name} not found")
+        # Get the agent config to find the agent_id
+        config = await self.repository.get_agent_by_name(name)
+        if not config:
+            raise ValueError(f"Agent '{name}' not found")
 
-        response = agent(prompt, **kwargs)
-
-        return response
+        # Use invoke_agent with the agent_id
+        return await self.invoke_agent(config.agent_id, prompt, **kwargs)
