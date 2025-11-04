@@ -8,8 +8,8 @@ pydantic-settings==2.6.0
 # Database
 asyncpg==0.29.0
 
-# Google Cloud & RAG (let google-adk manage versions)
-vertexai>=1.60.0
+# Missing dependency for google-adk
+deprecated>=1.2.14
 
 # Utilities
 python-dotenv==1.0.1
