@@ -215,7 +215,7 @@ class AgentService:
         Args:
             agent_id: The unique identifier of the agent
             prompt: The prompt to send to the agent
-            **kwargs: Additional arguments (user_id, session_id, etc.)
+            **kwargs: Additional arguments (user_id, session_id, use_session)
 
         Returns:
             The agent's response as a string
@@ -224,41 +224,87 @@ class AgentService:
         if not agent:
             raise ValueError(f"Agent {agent_id} not found")
 
+        # Check if we should use session-based approach (default: False for simplicity)
+        use_session = kwargs.get("use_session", False)
+
+        if use_session:
+            # Use session-based runner approach
+            return await self._invoke_with_session(agent_id, agent, prompt, **kwargs)
+        else:
+            # Use simple direct invocation (stateless)
+            return await self._invoke_direct(agent, prompt)
+
+    async def _invoke_direct(self, agent: Agent, prompt: str) -> str:
+        """
+        Invoke agent directly without session management (stateless).
+
+        Args:
+            agent: The agent instance
+            prompt: The prompt to send
+
+        Returns:
+            The agent's response as a string
+        """
+        try:
+            # For simple stateless invocation, just call the agent
+            response = agent(prompt)
+
+            # Handle different response types
+            if isinstance(response, str):
+                return response
+            elif hasattr(response, 'text'):
+                return response.text
+            elif hasattr(response, 'content'):
+                if hasattr(response.content, 'parts'):
+                    text_parts = []
+                    for part in response.content.parts:
+                        if hasattr(part, 'text'):
+                            text_parts.append(part.text)
+                    return ''.join(text_parts)
+                return str(response.content)
+            else:
+                return str(response)
+        except Exception as e:
+            raise RuntimeError(f"Error invoking agent: {str(e)}")
+
+    async def _invoke_with_session(
+        self, agent_id: str, agent: Agent, prompt: str, **kwargs
+    ) -> str:
+        """
+        Invoke agent using session-based runner approach.
+
+        Args:
+            agent_id: The agent ID
+            agent: The agent instance
+            prompt: The prompt to send
+            **kwargs: Additional arguments (user_id, session_id)
+
+        Returns:
+            The agent's response as a string
+        """
         # Get or create runner for this agent
         runner = self._get_or_create_runner(agent_id, agent)
-        
+
         # Extract user and session info
         user_id = kwargs.get("user_id", "default_user")
-        session_id = kwargs.get("session_id", f"session_{agent_id}_{user_id}")
+        session_id = kwargs.get("session_id")
         app_name = f"agent_{agent_id}"
-        
-        # Ensure session exists - create if it doesn't
+
+        # Create a new session for each request if not provided
+        if not session_id:
+            import uuid
+            session_id = f"session_{agent_id}_{uuid.uuid4().hex[:8]}"
+
+        # Always create a fresh session for this request
         try:
-            # Try to list sessions to see if ours exists
-            existing_sessions = self.session_service.list_sessions(
+            self.session_service.create_session(
                 app_name=app_name,
-                user_id=user_id
+                user_id=user_id,
+                session_id=session_id
             )
-            
-            session_exists = any(s.session_id == session_id for s in existing_sessions)
-            
-            if not session_exists:
-                # Create new session
-                self.session_service.create_session(
-                    app_name=app_name,
-                    user_id=user_id,
-                    session_id=session_id
-                )
         except Exception as e:
-            # If anything goes wrong, try to create the session
-            try:
-                self.session_service.create_session(
-                    app_name=app_name,
-                    user_id=user_id,
-                    session_id=session_id
-                )
-            except Exception as create_error:
-                print(f"Warning: Could not create session: {create_error}")
+            # Session might already exist, which is fine
+            print(f"Note: Session creation info: {e}")
 
         # Create message content in the format ADK expects
         message = types.Content(
@@ -281,7 +327,7 @@ class AgentService:
                             if hasattr(part, 'text') and part.text:
                                 response_text += part.text
         except Exception as e:
-            raise RuntimeError(f"Error running agent {agent_id}: {str(e)}")
+            raise RuntimeError(f"Error running agent with session: {str(e)}")
 
         return response_text
 
