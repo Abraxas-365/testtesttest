@@ -130,6 +130,9 @@ class AgentService:
         """
         Create an ADK agent from configuration.
 
+        Note: The model parameter accepts either a string (e.g., "gemini-2.0-flash")
+        or a model wrapper object. We pass the model name string directly.
+
         Args:
             config: The agent configuration
 
