@@ -4,6 +4,8 @@ import os
 import asyncpg
 from typing import Optional
 
+from google.adk.sessions import DatabaseSessionService, InMemorySessionService
+
 from src.domain.ports import AgentRepository, CorpusRepository
 from src.domain.services import AgentService
 from src.infrastructure.adapters.postgres import PostgresAgentRepository, PostgresCorpusRepository
@@ -24,6 +26,7 @@ class Container:
         self._corpus_repository: Optional[CorpusRepository] = None
         self._tool_registry: Optional[ToolRegistry] = None
         self._agent_service: Optional[AgentService] = None
+        self._session_service: Optional[any] = None
 
     async def init_repository(self) -> AgentRepository:
         """
@@ -95,6 +98,35 @@ class Container:
 
         return self._tool_registry
 
+    def get_session_service(self):
+        """
+        Get the session service based on PERSIST_SESSIONS environment variable.
+
+        Returns:
+            DatabaseSessionService for persistent sessions, or None for ephemeral
+        """
+        if self._session_service is None:
+            persist_sessions = os.getenv("PERSIST_SESSIONS", "false").lower() == "true"
+
+            if persist_sessions:
+                # Build PostgreSQL connection URL for ADK's DatabaseSessionService
+                db_user = os.getenv("DB_USER", "postgres")
+                db_password = os.getenv("DB_PASSWORD", "postgres")
+                db_host = os.getenv("DB_HOST", "localhost")
+                db_port = os.getenv("DB_PORT", "5432")
+                db_name = os.getenv("DB_NAME", "agents_db")
+
+                # PostgreSQL connection URL
+                db_url = f"postgresql://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}"
+
+                # Use ADK's built-in DatabaseSessionService
+                self._session_service = DatabaseSessionService(db_url=db_url)
+            else:
+                # Return None to use ephemeral in-memory sessions per request
+                self._session_service = None
+
+        return self._session_service
+
     async def get_agent_service(self) -> AgentService:
         """
         Get the agent service.
@@ -105,7 +137,8 @@ class Container:
         if self._agent_service is None:
             repository = await self.init_repository()
             tool_registry = self.get_tool_registry()
-            self._agent_service = AgentService(repository, tool_registry)
+            session_service = self.get_session_service()
+            self._agent_service = AgentService(repository, tool_registry, session_service)
 
         return self._agent_service
 

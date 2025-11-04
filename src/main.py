@@ -8,7 +8,6 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.application.api import router
-from src.application.api.session_routes import router as session_router
 from src.application.di import get_container, close_container
 
 
@@ -67,7 +66,6 @@ app.add_middleware(
 
 # Include API routes
 app.include_router(router, prefix="/api/v1")
-app.include_router(session_router, prefix="/api/v1", tags=["sessions"])
 
 
 @app.get("/")

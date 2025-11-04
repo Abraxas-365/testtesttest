@@ -279,17 +279,8 @@ class AgentService:
         except Exception as e:
             raise RuntimeError(f"Error invoking agent: {str(e)}")
 
-        # If using persistent sessions, save the response
-        if persist_session and self.persistent_session_service:
-            try:
-                await self.persistent_session_service.save_message(
-                    session_id=session_id,
-                    role="agent",
-                    content=response_text,
-                    model_used=agent.model if hasattr(agent, 'model') else None
-                )
-            except Exception as e:
-                print(f"Warning: Could not save response to database: {e}")
+        # Note: ADK's DatabaseSessionService automatically persists all messages
+        # No manual message saving needed
 
         return response_text if response_text else "No response generated"
 

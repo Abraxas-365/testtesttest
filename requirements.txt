@@ -8,6 +8,10 @@ pydantic-settings==2.6.0
 # Database
 asyncpg==0.29.0
 
+# ADK DatabaseSessionService dependencies
+sqlalchemy>=2.0.0
+psycopg2-binary>=2.9.0
+
 # Missing dependency for google-adk
 deprecated>=1.2.14
 
