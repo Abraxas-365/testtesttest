@@ -241,12 +241,11 @@ class AgentService:
             # Create ephemeral session service for this invocation only
             session_service = InMemorySessionService()
 
-        # Create the session
+        # Create the session (InMemorySessionService and DatabaseSessionService don't accept agent_id)
         await session_service.create_session(
             app_name=app_name,
             user_id=user_id,
-            session_id=session_id,
-            agent_id=agent_id
+            session_id=session_id
         )
 
         # Create a fresh runner
