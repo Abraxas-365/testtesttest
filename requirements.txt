@@ -1,15 +1,14 @@
 # Core dependencies
 google-adk==1.0.0
 fastapi==0.115.0
-uvicorn[standard]==0.34.0
+uvicorn[standard]>=0.34.0
 pydantic==2.9.2
 pydantic-settings==2.6.0
 
 # Database
 asyncpg==0.29.0
 
-# Google Cloud & RAG
-google-cloud-aiplatform[agent_engines,adk]>=1.112.0
+# Google Cloud & RAG (let google-adk manage versions)
 vertexai>=1.60.0
 
 # Utilities
