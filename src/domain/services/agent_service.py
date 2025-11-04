@@ -161,7 +161,7 @@ class AgentService:
             print(f"Error creating agent {config.name}: {e}")
             return None
 
-    def _get_runner(self, agent_id: str, agent: Agent) -> Runner:
+    def _get_or_create_runner(self, agent_id: str, agent: Agent) -> Runner:
         """
         Get or create a runner for the agent.
 
@@ -225,26 +225,40 @@ class AgentService:
             raise ValueError(f"Agent {agent_id} not found")
 
         # Get or create runner for this agent
-        runner = self._get_runner(agent_id, agent)
+        runner = self._get_or_create_runner(agent_id, agent)
         
         # Extract user and session info
         user_id = kwargs.get("user_id", "default_user")
-        session_id = kwargs.get("session_id", f"session_{agent_id}")
+        session_id = kwargs.get("session_id", f"session_{agent_id}_{user_id}")
+        app_name = f"agent_{agent_id}"
         
-        # Get or create session
+        # Ensure session exists - create if it doesn't
         try:
-            session = self.session_service.get_session(
-                app_name=f"agent_{agent_id}",
-                user_id=user_id,
-                session_id=session_id
+            # Try to list sessions to see if ours exists
+            existing_sessions = self.session_service.list_sessions(
+                app_name=app_name,
+                user_id=user_id
             )
-        except:
-            # If session doesn't exist, create it
-            session = self.session_service.create_session(
-                app_name=f"agent_{agent_id}",
-                user_id=user_id,
-                session_id=session_id
-            )
+            
+            session_exists = any(s.session_id == session_id for s in existing_sessions)
+            
+            if not session_exists:
+                # Create new session
+                self.session_service.create_session(
+                    app_name=app_name,
+                    user_id=user_id,
+                    session_id=session_id
+                )
+        except Exception as e:
+            # If anything goes wrong, try to create the session
+            try:
+                self.session_service.create_session(
+                    app_name=app_name,
+                    user_id=user_id,
+                    session_id=session_id
+                )
+            except Exception as create_error:
+                print(f"Warning: Could not create session: {create_error}")
 
         # Create message content in the format ADK expects
         message = types.Content(
