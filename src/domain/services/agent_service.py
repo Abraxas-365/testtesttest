@@ -6,7 +6,7 @@ from google.adk.agents import Agent, LlmAgent
 from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 from google.genai import types
-import vertexai
+from google.genai import Client
 
 from src.domain.models import AgentConfig
 from src.domain.ports import AgentRepository
@@ -41,15 +41,21 @@ class AgentService:
         self._agent_cache: dict[str, Agent] = {}
         self.persistent_session_service = session_service  # For database sessions
         
-        # Initialize Vertex AI with project and location
+        # Initialize Vertex AI configuration
         self.project_id = os.getenv("GOOGLE_CLOUD_PROJECT")
         self.location = os.getenv("GOOGLE_CLOUD_REGION", "us-central1")
         
         if not self.project_id:
             print("Warning: GOOGLE_CLOUD_PROJECT environment variable not set")
+            self.genai_client = None
         else:
-            print(f"Initializing Vertex AI with project={self.project_id}, location={self.location}")
-            vertexai.init(project=self.project_id, location=self.location)
+            print(f"Initializing GenAI Client for Vertex AI with project={self.project_id}, location={self.location}")
+            # Create a GenAI client configured for Vertex AI
+            self.genai_client = Client(
+                vertexai=True,
+                project=self.project_id,
+                location=self.location
+            )
 
     async def get_agent(self, agent_id: str, use_cache: bool = True) -> Optional[Agent]:
         """
@@ -158,22 +164,21 @@ class AgentService:
                 "tools": tools if tools else None,
             }
             
-            # Add Vertex AI configuration if project is set
-            if self.project_id:
-                agent_params["vertexai"] = True
-                agent_params["project"] = self.project_id
-                agent_params["location"] = self.location
+            # Add client if configured for Vertex AI
+            if self.genai_client:
+                agent_params["client"] = self.genai_client
 
             # Create agent based on whether it has sub-agents
             if sub_agents:
                 # Use LlmAgent for hierarchical agents
                 agent_params["sub_agents"] = sub_agents
                 agent = LlmAgent(**agent_params)
+                print(f"Successfully created LlmAgent: {config.name} (ID: {config.agent_id})")
             else:
                 # Use simple Agent for leaf agents
                 agent = Agent(**agent_params)
+                print(f"Successfully created Agent: {config.name} (ID: {config.agent_id})")
 
-            print(f"Successfully created agent: {config.name} (ID: {config.agent_id})")
             return agent
 
         except Exception as e:
