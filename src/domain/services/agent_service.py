@@ -31,10 +31,6 @@ class AgentService:
         self.repository = repository
         self.tool_registry = tool_registry
         self._agent_cache: dict[str, Agent] = {}
-        self._runner_cache: dict[str, Runner] = {}
-        
-        # Initialize session service for managing agent conversations
-        self.session_service = InMemorySessionService()
 
     async def get_agent(self, agent_id: str, use_cache: bool = True) -> Optional[Agent]:
         """
@@ -161,25 +157,6 @@ class AgentService:
             print(f"Error creating agent {config.name}: {e}")
             return None
 
-    def _get_or_create_runner(self, agent_id: str, agent: Agent) -> Runner:
-        """
-        Get or create a runner for the agent.
-
-        Args:
-            agent_id: The unique identifier of the agent
-            agent: The agent instance
-
-        Returns:
-            Runner instance for the agent
-        """
-        if agent_id not in self._runner_cache:
-            runner = Runner(
-                agent=agent,
-                app_name=f"agent_{agent_id}",
-                session_service=self.session_service
-            )
-            self._runner_cache[agent_id] = runner
-        return self._runner_cache[agent_id]
 
     async def reload_agent(self, agent_id: str) -> Optional[Agent]:
         """
@@ -194,17 +171,12 @@ class AgentService:
         # Remove from cache if present
         if agent_id in self._agent_cache:
             del self._agent_cache[agent_id]
-        
-        # Remove runner from cache too
-        if agent_id in self._runner_cache:
-            del self._runner_cache[agent_id]
 
         return await self.get_agent(agent_id, use_cache=False)
 
     def clear_cache(self):
-        """Clear the agent and runner caches."""
+        """Clear the agent cache."""
         self._agent_cache.clear()
-        self._runner_cache.clear()
 
     async def invoke_agent(
         self, agent_id: str, prompt: str, **kwargs
@@ -248,30 +220,28 @@ class AgentService:
         user_id = kwargs.get("user_id", "default_user")
         session_id = kwargs.get("session_id")
 
-        # Generate unique session ID for each request to avoid conflicts
+        # Generate unique session ID for each request
         if not session_id:
             session_id = f"sess_{uuid.uuid4().hex[:12]}"
 
         app_name = f"agent_{agent_id}"
 
-        # Create a fresh runner for each request to avoid session conflicts
-        # This ensures clean state for each invocation
+        # Create session service for this invocation
+        session_service = InMemorySessionService()
+
+        # Create the session
+        session_service.create_session(
+            app_name=app_name,
+            user_id=user_id,
+            session_id=session_id
+        )
+
+        # Create a fresh runner with its own session service
         runner = Runner(
             agent=agent,
             app_name=app_name,
-            session_service=self.session_service
+            session_service=session_service
         )
-
-        # Create the session
-        try:
-            self.session_service.create_session(
-                app_name=app_name,
-                user_id=user_id,
-                session_id=session_id
-            )
-        except Exception as e:
-            # If session already exists, that's okay
-            pass
 
         # Create message content
         message = types.Content(
@@ -295,16 +265,6 @@ class AgentService:
                                 response_text += part.text
         except Exception as e:
             raise RuntimeError(f"Error invoking agent: {str(e)}")
-
-        # Clean up session after use to prevent accumulation
-        try:
-            self.session_service.delete_session(
-                app_name=app_name,
-                user_id=user_id,
-                session_id=session_id
-            )
-        except:
-            pass  # Ignore cleanup errors
 
         return response_text if response_text else "No response generated"
 
