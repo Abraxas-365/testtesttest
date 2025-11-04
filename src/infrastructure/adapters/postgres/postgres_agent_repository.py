@@ -85,7 +85,7 @@ class PostgresAgentRepository(AgentRepository):
                 a.top_p,
                 a.top_k,
                 COALESCE(
-                    json_agg(DISTINCT
+                    json_agg(
                         json_build_object(
                             'tool_id', t.tool_id,
                             'tool_name', t.tool_name,
@@ -99,7 +99,7 @@ class PostgresAgentRepository(AgentRepository):
                     '[]'
                 ) as tools,
                 COALESCE(
-                    json_agg(DISTINCT
+                    json_agg(
                         json_build_object(
                             'corpus_id', c.corpus_id,
                             'corpus_name', c.corpus_name,
@@ -157,7 +157,7 @@ class PostgresAgentRepository(AgentRepository):
                 a.top_p,
                 a.top_k,
                 COALESCE(
-                    json_agg(DISTINCT
+                    json_agg(
                         json_build_object(
                             'tool_id', t.tool_id,
                             'tool_name', t.tool_name,
@@ -171,7 +171,7 @@ class PostgresAgentRepository(AgentRepository):
                     '[]'
                 ) as tools,
                 COALESCE(
-                    json_agg(DISTINCT
+                    json_agg(
                         json_build_object(
                             'corpus_id', c.corpus_id,
                             'corpus_name', c.corpus_name,
@@ -229,7 +229,7 @@ class PostgresAgentRepository(AgentRepository):
                 a.top_p,
                 a.top_k,
                 COALESCE(
-                    json_agg(DISTINCT
+                    json_agg(
                         json_build_object(
                             'tool_id', t.tool_id,
                             'tool_name', t.tool_name,
@@ -243,7 +243,7 @@ class PostgresAgentRepository(AgentRepository):
                     '[]'
                 ) as tools,
                 COALESCE(
-                    json_agg(DISTINCT
+                    json_agg(
                         json_build_object(
                             'corpus_id', c.corpus_id,
                             'corpus_name', c.corpus_name,
