@@ -4,6 +4,22 @@ import os
 import logging
 from contextlib import asynccontextmanager
 
+# Configure Vertex AI environment variables BEFORE any ADK imports
+# ADK reads these variables during initialization, so they must be set first
+if not os.getenv("GOOGLE_GENAI_USE_VERTEXAI"):
+    os.environ["GOOGLE_GENAI_USE_VERTEXAI"] = "TRUE"
+
+# Set project and location from Cloud Run's environment
+# These are typically already set in Cloud Run, but we ensure they exist
+if not os.getenv("GOOGLE_CLOUD_PROJECT"):
+    logger_msg = "WARNING: GOOGLE_CLOUD_PROJECT not set. ADK agents will fail."
+    print(logger_msg)
+
+if not os.getenv("GOOGLE_CLOUD_LOCATION"):
+    # Default to us-central1 if not specified
+    os.environ["GOOGLE_CLOUD_LOCATION"] = "us-central1"
+    print(f"INFO: GOOGLE_CLOUD_LOCATION not set, defaulting to us-central1")
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
