@@ -242,7 +242,7 @@ class AgentService:
             session_service = InMemorySessionService()
 
         # Create the session
-        session_service.create_session(
+        await session_service.create_session(
             app_name=app_name,
             user_id=user_id,
             session_id=session_id,
@@ -282,7 +282,7 @@ class AgentService:
         # If using persistent sessions, save the response
         if persist_session and self.persistent_session_service:
             try:
-                await self.persistent_session_service.save_message_async(
+                await self.persistent_session_service.save_message(
                     session_id=session_id,
                     role="agent",
                     content=response_text,
