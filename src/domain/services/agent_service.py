@@ -215,7 +215,7 @@ class AgentService:
         Args:
             agent_id: The unique identifier of the agent
             prompt: The prompt to send to the agent
-            **kwargs: Additional arguments (user_id, session_id, use_session)
+            **kwargs: Additional arguments (user_id, session_id)
 
         Returns:
             The agent's response as a string
@@ -224,54 +224,14 @@ class AgentService:
         if not agent:
             raise ValueError(f"Agent {agent_id} not found")
 
-        # Check if we should use session-based approach (default: False for simplicity)
-        use_session = kwargs.get("use_session", False)
+        # Always use Runner for proper ADK invocation
+        return await self._invoke_with_runner(agent_id, agent, prompt, **kwargs)
 
-        if use_session:
-            # Use session-based runner approach
-            return await self._invoke_with_session(agent_id, agent, prompt, **kwargs)
-        else:
-            # Use simple direct invocation (stateless)
-            return await self._invoke_direct(agent, prompt)
-
-    async def _invoke_direct(self, agent: Agent, prompt: str) -> str:
-        """
-        Invoke agent directly without session management (stateless).
-
-        Args:
-            agent: The agent instance
-            prompt: The prompt to send
-
-        Returns:
-            The agent's response as a string
-        """
-        try:
-            # For simple stateless invocation, just call the agent
-            response = agent(prompt)
-
-            # Handle different response types
-            if isinstance(response, str):
-                return response
-            elif hasattr(response, 'text'):
-                return response.text
-            elif hasattr(response, 'content'):
-                if hasattr(response.content, 'parts'):
-                    text_parts = []
-                    for part in response.content.parts:
-                        if hasattr(part, 'text'):
-                            text_parts.append(part.text)
-                    return ''.join(text_parts)
-                return str(response.content)
-            else:
-                return str(response)
-        except Exception as e:
-            raise RuntimeError(f"Error invoking agent: {str(e)}")
-
-    async def _invoke_with_session(
+    async def _invoke_with_runner(
         self, agent_id: str, agent: Agent, prompt: str, **kwargs
     ) -> str:
         """
-        Invoke agent using session-based runner approach.
+        Invoke agent using Runner (proper ADK way).
 
         Args:
             agent_id: The agent ID
@@ -282,20 +242,27 @@ class AgentService:
         Returns:
             The agent's response as a string
         """
-        # Get or create runner for this agent
-        runner = self._get_or_create_runner(agent_id, agent)
+        import uuid
 
         # Extract user and session info
         user_id = kwargs.get("user_id", "default_user")
         session_id = kwargs.get("session_id")
+
+        # Generate unique session ID for each request to avoid conflicts
+        if not session_id:
+            session_id = f"sess_{uuid.uuid4().hex[:12]}"
+
         app_name = f"agent_{agent_id}"
 
-        # Create a new session for each request if not provided
-        if not session_id:
-            import uuid
-            session_id = f"session_{agent_id}_{uuid.uuid4().hex[:8]}"
+        # Create a fresh runner for each request to avoid session conflicts
+        # This ensures clean state for each invocation
+        runner = Runner(
+            agent=agent,
+            app_name=app_name,
+            session_service=self.session_service
+        )
 
-        # Always create a fresh session for this request
+        # Create the session
         try:
             self.session_service.create_session(
                 app_name=app_name,
@@ -303,10 +270,10 @@ class AgentService:
                 session_id=session_id
             )
         except Exception as e:
-            # Session might already exist, which is fine
-            print(f"Note: Session creation info: {e}")
+            # If session already exists, that's okay
+            pass
 
-        # Create message content in the format ADK expects
+        # Create message content
         message = types.Content(
             role="user",
             parts=[types.Part(text=prompt)]
@@ -320,16 +287,26 @@ class AgentService:
                 session_id=session_id,
                 new_message=message
             ):
-                # Check if this is the final response
-                if event.is_final_response() and event.content:
-                    if event.content.parts:
+                # Collect all text from events
+                if hasattr(event, 'content') and event.content:
+                    if hasattr(event.content, 'parts'):
                         for part in event.content.parts:
                             if hasattr(part, 'text') and part.text:
                                 response_text += part.text
         except Exception as e:
-            raise RuntimeError(f"Error running agent with session: {str(e)}")
+            raise RuntimeError(f"Error invoking agent: {str(e)}")
 
-        return response_text
+        # Clean up session after use to prevent accumulation
+        try:
+            self.session_service.delete_session(
+                app_name=app_name,
+                user_id=user_id,
+                session_id=session_id
+            )
+        except:
+            pass  # Ignore cleanup errors
+
+        return response_text if response_text else "No response generated"
 
     async def invoke_agent_by_name(
         self, name: str, prompt: str, **kwargs
