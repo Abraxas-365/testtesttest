@@ -24,7 +24,12 @@ class AgentType(str, Enum):
 
 
 class AreaType(str, Enum):
-    """Agent area/domain types."""
+    """
+    Agent area/domain types.
+
+    Note: area_type is now flexible and can match any Azure AD group name.
+    These are common examples, but not restricted to this list.
+    """
     GENERAL = "general"
     MARKETING = "marketing"
     LEGAL = "legal"

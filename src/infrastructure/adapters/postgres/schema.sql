@@ -10,7 +10,7 @@ CREATE TABLE IF NOT EXISTS agents (
     metadata JSONB DEFAULT '{}'::jsonb,
     -- Agent classification
     agent_type VARCHAR(50) DEFAULT 'assistant' CHECK (agent_type IN ('assistant', 'coordinator', 'specialist', 'rag', 'tool')),
-    area_type VARCHAR(50) DEFAULT 'general' CHECK (area_type IN ('general', 'marketing', 'legal', 'developer', 'operations', 'sales', 'customer_support', 'finance', 'hr', 'data_analysis')),
+    area_type VARCHAR(50) DEFAULT 'general',  -- Removed constraint to match Azure AD groups dynamically
     -- Model configuration
     model_name VARCHAR(100) NOT NULL,
     temperature DECIMAL(3, 2) DEFAULT 0.7,

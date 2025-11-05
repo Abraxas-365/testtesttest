@@ -24,6 +24,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.application.api import router
+from src.application.api.teams_routes import router as teams_router
+from src.application.api.group_mapping_routes import router as group_mapping_router
 from src.application.di import get_container, close_container
 
 
@@ -82,6 +84,8 @@ app.add_middleware(
 
 # Include API routes
 app.include_router(router, prefix="/api/v1")
+app.include_router(teams_router, prefix="/api/v1", tags=["teams"])
+app.include_router(group_mapping_router, prefix="/api/v1", tags=["group-mappings"])
 
 
 @app.get("/")
