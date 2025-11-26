@@ -25,6 +25,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from src.application.api import router
 from src.application.api.teams_routes import router as teams_router
+from src.application.api.tabs_routes import router as tabs_router
 from src.application.api.group_mapping_routes import router as group_mapping_router
 from src.application.di import get_container, close_container
 
@@ -71,9 +72,25 @@ app = FastAPI(
 )
 
 # Add CORS middleware
+# Updated for Teams Tabs support with specific domain allowlist
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        # Teams domains
+        "https://teams.microsoft.com",
+        "https://*.teams.microsoft.com",
+        "https://*.teams.office.com",
+        "https://outlook.office.com",
+        "https://*.outlook.office.com",
+        # Local development
+        "http://localhost:5173",
+        "http://localhost:3000",
+        "http://localhost:8080",
+        # Add your deployed frontend URL here
+        # "https://your-frontend-app.com",
+        # Allow all for development (comment out in production)
+        "*",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -81,7 +98,10 @@ app.add_middleware(
 
 # Include API routes
 app.include_router(router, prefix="/api/v1")
-app.include_router(teams_router, prefix="/api/v1", tags=["teams"])
+# Legacy bot routes (can be deprecated once tabs are fully migrated)
+app.include_router(teams_router, prefix="/api/v1", tags=["teams-bot"])
+# New Teams Tabs routes (replacement for bot framework)
+app.include_router(tabs_router, prefix="/api/v1", tags=["teams-tabs"])
 app.include_router(group_mapping_router, prefix="/api/v1", tags=["group-mappings"])
 
 
