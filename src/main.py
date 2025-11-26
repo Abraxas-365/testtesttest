@@ -121,11 +121,17 @@ async def health():
     """Health check."""
     return {
         "status": "healthy",
-        "version": "1.0.1",
+        "version": "2.0.0",
+        "mode": "dual (bot + tabs)",
         "file_support": {
             "pdf": True,
             "docx": True,
             "method": "gemini_native"
+        },
+        "endpoints": {
+            "bot": "/api/v1/teams/message",
+            "tabs": "/api/v1/tabs/invoke",
+            "tabs_health": "/api/v1/tabs/health"
         }
     }
 
