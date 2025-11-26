@@ -1,0 +1,55 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/teams/v1.16/MicrosoftTeams.schema.json",
+  "manifestVersion": "1.16",
+  "version": "1.0.2",
+  "id": "8f932a37-a7f6-4fe8-be5e-a72ab69758cf",
+  "packageName": "com.grupodc.agentproject",
+  "developer": {
+    "name": "GrupoDC",
+    "websiteUrl": "https://grupodc-agent-backend-dev-118078450167.us-east4.run.app",
+    "privacyUrl": "https://grupodc-agent-backend-dev-118078450167.us-east4.run.app/privacy",
+    "termsOfUseUrl": "https://grupodc-agent-backend-dev-118078450167.us-east4.run.app/terms"
+  },
+  "name": {
+    "short": "GrupoDC Agent",
+    "full": "GrupoDC Agent Project"
+  },
+  "description": {
+    "short": "AI assistant for GrupoDC with document support.",
+    "full": "An intelligent AI assistant integrated into Microsoft Teams to help with various tasks, powered by Google Cloud. Supports PDF and DOCX document analysis."
+  },
+  "icons": {
+    "outline": "outline.png",
+    "color": "color.png"
+  },
+  "accentColor": "#FFFFFF",
+  "bots": [
+    {
+      "botId": "8f932a37-a7f6-4fe8-be5e-a72ab69758cf",
+      "scopes": [
+        "personal",
+        "team",
+        "groupchat"
+      ],
+      "supportsFiles": true,
+      "isNotificationOnly": false,
+      "supportsCalling": false,
+      "supportsVideo": false
+    }
+  ],
+  "permissions": [
+    "identity",
+    "messageTeamMembers"
+  ],
+  "validDomains": [
+    "token.botframework.com",
+    "*.botframework.com",
+    "*.blob.core.windows.net",
+    "smba.trafficmanager.net",
+    "grupodc-agent-backend-dev-118078450167.us-east4.run.app"
+  ],
+  "webApplicationInfo": {
+    "id": "8f932a37-a7f6-4fe8-be5e-a72ab69758cf",
+    "resource": "https://grupodc-agent-backend-dev-118078450167.us-east4.run.app"
+  }
+}

@@ -3,22 +3,32 @@
 from typing import Optional, Any
 from google.adk.agents import Agent, LlmAgent
 from google.adk.runners import Runner
-from google.adk.sessions import InMemorySessionService
 from google.genai import types
+import logging
+import uuid
+import asyncio
+from asyncio import Lock
+from collections import defaultdict
 
 from src.domain.models import AgentConfig
 from src.domain.ports import AgentRepository
 from src.infrastructure.tools import ToolRegistry
 
+logger = logging.getLogger(__name__)
+
+
+class SessionLockManager:
+    """Manages locks for session access to prevent race conditions."""
+    def __init__(self):
+        self._locks: dict[str, Lock] = defaultdict(Lock)
+    
+    def get_lock(self, session_id: str) -> Lock:
+        """Get or create a lock for a session."""
+        return self._locks[session_id]
+
 
 class AgentService:
-    """
-    Service for creating and managing ADK agents.
-
-    This service uses the repository (port) to load agent configurations
-    and the tool registry to resolve tool functions, then creates
-    Google ADK Agent instances.
-    """
+    """Service for creating and managing ADK agents."""
 
     def __init__(
         self,
@@ -26,30 +36,14 @@ class AgentService:
         tool_registry: ToolRegistry,
         session_service: Optional[Any] = None
     ):
-        """
-        Initialize the agent service.
-
-        Args:
-            repository: The agent repository (port interface)
-            tool_registry: The tool registry for resolving tools
-            session_service: Optional session service (PostgreSQL or InMemory)
-        """
         self.repository = repository
         self.tool_registry = tool_registry
         self._agent_cache: dict[str, Agent] = {}
-        self.persistent_session_service = session_service  # For database sessions
+        self.persistent_session_service = session_service
+        self.lock_manager = SessionLockManager()
 
     async def get_agent(self, agent_id: str, use_cache: bool = True) -> Optional[Agent]:
-        """
-        Get an ADK agent by ID.
-
-        Args:
-            agent_id: The unique identifier of the agent
-            use_cache: If True, return cached agent if available
-
-        Returns:
-            Agent instance if found, None otherwise
-        """
+        """Get an ADK agent by ID."""
         if use_cache and agent_id in self._agent_cache:
             return self._agent_cache[agent_id]
 
@@ -64,21 +58,11 @@ class AgentService:
         return agent
 
     async def get_agent_by_name(self, name: str, use_cache: bool = True) -> Optional[Agent]:
-        """
-        Get an ADK agent by name.
-
-        Args:
-            name: The name of the agent
-            use_cache: If True, return cached agent if available
-
-        Returns:
-            Agent instance if found, None otherwise
-        """
+        """Get an ADK agent by name."""
         config = await self.repository.get_agent_by_name(name)
         if not config:
             return None
 
-        # Check cache by agent_id
         if use_cache and config.agent_id in self._agent_cache:
             return self._agent_cache[config.agent_id]
 
@@ -89,15 +73,7 @@ class AgentService:
         return agent
 
     async def list_agents(self, enabled_only: bool = True) -> list[Agent]:
-        """
-        List all ADK agents.
-
-        Args:
-            enabled_only: If True, return only enabled agents
-
-        Returns:
-            List of Agent instances
-        """
+        """List all ADK agents."""
         configs = await self.repository.list_agents(enabled_only)
         agents = []
 
@@ -109,30 +85,19 @@ class AgentService:
         return agents
 
     async def _create_agent_from_config(self, config: AgentConfig) -> Optional[Agent]:
-        """
-        Create an ADK agent from configuration.
-
-        Note: The model parameter accepts either a string (e.g., "gemini-2.0-flash")
-        or a model wrapper object. We pass the model name string directly.
-
-        Args:
-            config: The agent configuration
-
-        Returns:
-            Agent instance or None if creation fails
-        """
+        """Create an ADK agent from configuration."""
         if not config.enabled:
             return None
 
         try:
-            # Get tools for the agent (pass corpuses and agent_service for RAG/agent tools)
+            from src.infrastructure.callbacks.context_management import safe_context_management_callback
+            
             tools = self.tool_registry.get_tools_for_configs(
                 config.tools,
                 corpuses=config.corpuses,
                 agent_service=self
             )
 
-            # Get sub-agents if any
             sub_agents = []
             if config.sub_agent_ids:
                 for sub_agent_id in config.sub_agent_ids:
@@ -140,9 +105,7 @@ class AgentService:
                     if sub_agent:
                         sub_agents.append(sub_agent)
 
-            # Create agent based on whether it has sub-agents
             if sub_agents:
-                # Use LlmAgent for hierarchical agents
                 agent = LlmAgent(
                     name=config.name,
                     model=config.model.model_name,
@@ -150,34 +113,26 @@ class AgentService:
                     instruction=config.instruction,
                     tools=tools if tools else None,
                     sub_agents=sub_agents,
+                    before_model_callback=safe_context_management_callback,
                 )
             else:
-                # Use simple Agent for leaf agents
                 agent = Agent(
                     name=config.name,
                     model=config.model.model_name,
                     description=config.description,
                     instruction=config.instruction,
                     tools=tools if tools else None,
+                    before_model_callback=safe_context_management_callback,
                 )
 
             return agent
 
         except Exception as e:
-            print(f"Error creating agent {config.name}: {e}")
+            logger.error(f"Error creating agent {config.name}: {e}")
             return None
 
     async def reload_agent(self, agent_id: str) -> Optional[Agent]:
-        """
-        Reload an agent from the database, bypassing cache.
-
-        Args:
-            agent_id: The unique identifier of the agent
-
-        Returns:
-            Agent instance if found, None otherwise
-        """
-        # Remove from cache if present
+        """Reload an agent from the database, bypassing cache."""
         if agent_id in self._agent_cache:
             del self._agent_cache[agent_id]
 
@@ -192,117 +147,157 @@ class AgentService:
     ) -> str:
         """
         Invoke an agent with a prompt.
-
-        Args:
-            agent_id: The unique identifier of the agent
-            prompt: The prompt to send to the agent
-            **kwargs: Additional arguments (user_id, session_id)
-
-        Returns:
-            The agent's response as a string
+        Sessions are ALWAYS persisted to database.
+        Uses session locking to prevent race conditions.
         """
         agent = await self.get_agent(agent_id)
         if not agent:
             raise ValueError(f"Agent {agent_id} not found")
 
-        # Always use Runner for proper ADK invocation
-        return await self._invoke_with_runner(agent_id, agent, prompt, **kwargs)
+        session_id = kwargs.get("session_id")
+        if not session_id:
+            session_id = f"sess_{uuid.uuid4().hex[:12]}"
+            kwargs["session_id"] = session_id
+        
+        async with self.lock_manager.get_lock(session_id):
+            logger.info(f"🔒 Acquired lock for session {session_id[:20]}...")
+            try:
+                result = await self._invoke_with_runner(agent_id, agent, prompt, **kwargs)
+                logger.info(f"🔓 Released lock for session {session_id[:20]}...")
+                return result
+            except Exception as e:
+                logger.info(f"🔓 Released lock for session {session_id[:20]}... (error)")
+                raise
 
     async def _invoke_with_runner(
         self, agent_id: str, agent: Agent, prompt: str, **kwargs
     ) -> str:
         """
-        Invoke agent using Runner (proper ADK way).
-
-        Args:
-            agent_id: The agent ID
-            agent: The agent instance
-            prompt: The prompt to send
-            **kwargs: Additional arguments (user_id, session_id, persist_session)
-
-        Returns:
-            The agent's response as a string
+        Invoke agent using Runner with proper session history loading.
+        Sessions are ALWAYS persisted to database using DatabaseSessionService.
         """
-        import uuid
-
-        # Extract user and session info
         user_id = kwargs.get("user_id", "default_user")
         session_id = kwargs.get("session_id")
-        persist_session = kwargs.get("persist_session", False)
 
-        # Generate unique session ID for each request if not provided
         if not session_id:
             session_id = f"sess_{uuid.uuid4().hex[:12]}"
 
         app_name = f"agent_{agent_id}"
 
-        # Choose session service: persistent (database) or ephemeral (in-memory)
-        if persist_session and self.persistent_session_service:
-            session_service = self.persistent_session_service
-        else:
-            # Create ephemeral session service for this invocation only
-            session_service = InMemorySessionService()
+        session_service = self.persistent_session_service
+        
+        if not session_service:
+            raise RuntimeError(
+                "DatabaseSessionService not initialized! "
+                "Check database connection and configuration."
+            )
+        
+        logger.info(f"💾 Using persistent DatabaseSessionService")
 
-        # Create the session (InMemorySessionService and DatabaseSessionService don't accept agent_id)
-        await session_service.create_session(
-            app_name=app_name,
-            user_id=user_id,
-            session_id=session_id
-        )
+        session = None
+        try:
+            session = await session_service.get_session(
+                app_name=app_name,
+                user_id=user_id,
+                session_id=session_id
+            )
+            if session:
+                history_count = len(session.history) if hasattr(session, 'history') and session.history else 0
+                logger.info(f"🔄 Loaded FRESH session {session_id[:50]}... with {history_count} messages")
+                
+                if hasattr(session, 'last_update_time'):
+                    logger.info(f"📅 Session last updated: {session.last_update_time}")
+            else:
+                logger.info(f"📝 No existing session found")
+        except Exception as e:
+            logger.warning(f"⚠️ Error loading session: {e}")
+            session = None
 
-        # Create a fresh runner
+        if not session:
+            try:
+                logger.info(f"🆕 Creating new session {session_id[:50]}...")
+                session = await session_service.create_session(
+                    app_name=app_name,
+                    user_id=user_id,
+                    session_id=session_id
+                )
+            except Exception as e:
+                logger.error(f"❌ Error creating session: {e}")
+                raise RuntimeError(f"Failed to create session: {str(e)}")
+
         runner = Runner(
             agent=agent,
             app_name=app_name,
             session_service=session_service
         )
 
-        # Create message content
         message = types.Content(
             role="user",
             parts=[types.Part(text=prompt)]
         )
 
-        # Run agent and collect response
+        history_count = 0
+        if session and hasattr(session, 'history') and session.history:
+            history_count = len(session.history)
+        
+        logger.info(f"🤖 Sending to LLM with {history_count} history messages")
+
         response_text = ""
+        function_calls_made = 0
+        
         try:
-            async for event in runner.run_async(
-                user_id=user_id,
-                session_id=session_id,
-                new_message=message
-            ):
-                # Collect all text from events
-                if hasattr(event, 'content') and event.content:
-                    if hasattr(event.content, 'parts'):
-                        for part in event.content.parts:
-                            if hasattr(part, 'text') and part.text:
-                                response_text += part.text
+            async def run_with_timeout():
+                nonlocal response_text, function_calls_made
+                
+                async for event in runner.run_async(
+                    user_id=user_id,
+                    session_id=session_id,
+                    new_message=message
+                ):
+                    if hasattr(event, 'content') and event.content:
+                        if hasattr(event.content, 'parts'):
+                            for part in event.content.parts:
+                                if hasattr(part, 'function_call') and part.function_call:
+                                    function_calls_made += 1
+                                    logger.info(f"🔧 Function call: {part.function_call.name}")
+                                
+                                if hasattr(part, 'text') and part.text:
+                                    response_text += part.text
+                    
+                    if hasattr(event, 'text') and event.text:
+                        response_text += event.text
+            
+            await asyncio.wait_for(run_with_timeout(), timeout=60.0)
+            
+            logger.info(f"✅ Collected response ({len(response_text)} chars, {function_calls_made} function calls)")
+            
+        except asyncio.TimeoutError:
+            logger.error(f"⏱️ Agent processing timed out after 60 seconds")
+            raise RuntimeError(
+                "El procesamiento está tomando más tiempo del esperado. "
+                "Por favor, intenta con una consulta más específica o un documento más corto."
+            )
         except Exception as e:
+            logger.error(f"❌ Error invoking agent: {e}", exc_info=True)
             raise RuntimeError(f"Error invoking agent: {str(e)}")
 
-        # Note: ADK's DatabaseSessionService automatically persists all messages
-        # No manual message saving needed
+        if not response_text and function_calls_made > 0:
+            response_text = "I've processed your request using my tools. How else can I help you?"
+        
+        if not response_text:
+            response_text = "I apologize, but I couldn't generate a response. Could you please rephrase your question?"
 
-        return response_text if response_text else "No response generated"
+        return response_text
 
     async def invoke_agent_by_name(
         self, name: str, prompt: str, **kwargs
     ) -> str:
         """
         Invoke an agent by name with a prompt.
-
-        Args:
-            name: The name of the agent
-            prompt: The prompt to send to the agent
-            **kwargs: Additional arguments (user_id, session_id, etc.)
-
-        Returns:
-            The agent's response as a string
+        Sessions are ALWAYS persisted to database.
         """
-        # Get the agent config to find the agent_id
         config = await self.repository.get_agent_by_name(name)
         if not config:
             raise ValueError(f"Agent '{name}' not found")
 
-        # Use invoke_agent with the agent_id
         return await self.invoke_agent(config.agent_id, prompt, **kwargs)

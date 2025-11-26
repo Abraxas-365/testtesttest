@@ -14,8 +14,6 @@ def search_web(query: str) -> dict[str, Any]:
     Returns:
         A dictionary with search results
     """
-    # This is a placeholder implementation
-    # In production, you would integrate with a real search API
     return {
         "status": "success",
         "query": query,
@@ -41,8 +39,6 @@ def calculate(expression: str) -> dict[str, Any]:
         A dictionary with the calculation result
     """
     try:
-        # Note: In production, use a safe math parser instead of eval
-        # This is just for demonstration purposes
         result = eval(expression, {"__builtins__": {}}, {})
         return {
             "status": "success",
@@ -68,8 +64,6 @@ def get_weather(city: str, country: str = "US") -> dict[str, Any]:
     Returns:
         A dictionary with weather information
     """
-    # This is a placeholder implementation
-    # In production, you would integrate with a real weather API
     return {
         "status": "success",
         "location": f"{city}, {country}",

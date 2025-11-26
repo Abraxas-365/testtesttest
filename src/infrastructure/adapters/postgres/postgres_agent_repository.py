@@ -371,38 +371,32 @@ class PostgresAgentRepository(AgentRepository):
                     agent.model.top_k,
                 )
 
-                # Delete existing tool associations
                 await conn.execute(
                     "DELETE FROM agent_tools WHERE agent_id = $1", agent.agent_id
                 )
 
-                # Insert new tool associations
                 if agent.tools:
                     await conn.executemany(
                         "INSERT INTO agent_tools (agent_id, tool_id) VALUES ($1, $2)",
                         [(agent.agent_id, tool.tool_id) for tool in agent.tools],
                     )
 
-                # Delete existing corpus associations
                 await conn.execute(
                     "DELETE FROM agent_corpuses WHERE agent_id = $1",
                     agent.agent_id,
                 )
 
-                # Insert new corpus associations
                 if agent.corpuses:
                     await conn.executemany(
                         "INSERT INTO agent_corpuses (agent_id, corpus_id, priority) VALUES ($1, $2, $3)",
                         [(agent.agent_id, corpus.corpus_id, corpus.priority) for corpus in agent.corpuses],
                     )
 
-                # Delete existing sub-agent associations
                 await conn.execute(
                     "DELETE FROM agent_sub_agents WHERE parent_agent_id = $1",
                     agent.agent_id,
                 )
 
-                # Insert new sub-agent associations
                 if agent.sub_agent_ids:
                     await conn.executemany(
                         "INSERT INTO agent_sub_agents (parent_agent_id, sub_agent_id) VALUES ($1, $2)",

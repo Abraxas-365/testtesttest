@@ -17,7 +17,6 @@ class InvokeRequest(BaseModel):
     prompt: str
     user_id: str = "default_user"
     session_id: Optional[str] = None
-    persist_session: bool = False  # Enable to save conversation history
 
 
 class InvokeResponse(BaseModel):
@@ -47,9 +46,9 @@ async def health_check():
 async def invoke_agent(request: InvokeRequest):
     """
     Invoke an agent with a prompt.
-
+    
+    Sessions are ALWAYS persisted to database for conversation history.
     Either agent_id or agent_name must be provided.
-    Set persist_session=true to save conversation history.
     """
     if not request.agent_id and not request.agent_name:
         raise HTTPException(
@@ -66,8 +65,7 @@ async def invoke_agent(request: InvokeRequest):
                 request.agent_id,
                 request.prompt,
                 user_id=request.user_id,
-                session_id=request.session_id,
-                persist_session=request.persist_session
+                session_id=request.session_id
             )
             return InvokeResponse(
                 response=response,
@@ -79,8 +77,7 @@ async def invoke_agent(request: InvokeRequest):
                 request.agent_name,
                 request.prompt,
                 user_id=request.user_id,
-                session_id=request.session_id,
-                persist_session=request.persist_session
+                session_id=request.session_id
             )
             return InvokeResponse(
                 response=response,

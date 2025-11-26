@@ -24,7 +24,12 @@ class AgentType(str, Enum):
 
 
 class AreaType(str, Enum):
-    """Agent area/domain types."""
+    """
+    Agent area/domain types.
+
+    Note: area_type is now flexible and can match any Azure AD group name.
+    These are common examples, but not restricted to this list.
+    """
     GENERAL = "general"
     MARKETING = "marketing"
     LEGAL = "legal"
@@ -78,7 +83,7 @@ class CorpusConfig:
     document_count: int = 0
     chunk_size: int = 1000
     chunk_overlap: int = 200
-    priority: int = 1  # Priority when assigned to an agent
+    priority: int = 1  
     metadata: dict[str, Any] = field(default_factory=dict)
     enabled: bool = True
 
@@ -135,12 +140,3 @@ class AgentConfig:
         if not self.instruction:
             raise ValueError("Agent instruction cannot be empty")
 
-        # Validate agent_type
-        valid_agent_types = [t.value for t in AgentType]
-        if self.agent_type not in valid_agent_types:
-            raise ValueError(f"agent_type must be one of {valid_agent_types}")
-
-        # Validate area_type
-        valid_area_types = [t.value for t in AreaType]
-        if self.area_type not in valid_area_types:
-            raise ValueError(f"area_type must be one of {valid_area_types}")

@@ -107,7 +107,6 @@ async def get_session(session_id: str, user_id: str = "default_user"):
         pool = agent_service.persistent_session_service.pool
 
         async with pool.acquire() as conn:
-            # Get session
             session_row = await conn.fetchrow(
                 """
                 SELECT session_id, app_name, user_id, agent_id, status,
@@ -121,7 +120,6 @@ async def get_session(session_id: str, user_id: str = "default_user"):
             if not session_row:
                 raise HTTPException(status_code=404, detail="Session not found")
 
-            # Get messages
             message_rows = await conn.fetch(
                 """
                 SELECT message_id, role, content, created_at,

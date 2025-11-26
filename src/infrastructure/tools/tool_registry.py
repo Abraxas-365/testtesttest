@@ -2,8 +2,11 @@
 
 import importlib
 import inspect
+import logging
 from typing import Any, Callable, Optional
 from src.domain.models import ToolConfig, CorpusConfig
+
+logger = logging.getLogger(__name__)
 
 
 class ToolRegistry:
@@ -23,7 +26,6 @@ class ToolRegistry:
         """Register built-in tools."""
         from src.infrastructure.tools import sample_tools
 
-        # Auto-register all functions from sample_tools module
         for name, func in inspect.getmembers(sample_tools, inspect.isfunction):
             if not name.startswith("_"):
                 self._tools[name] = func
@@ -67,8 +69,10 @@ class ToolRegistry:
             return tool_config.tool_name
 
         elif tool_config.tool_type == "rag":
-            # For RAG tools, create a specialized RAG tool with corpuses
-            return self._create_rag_tool(tool_config, corpuses)
+            # ⚠️ This method is no longer used for RAG tools
+            # RAG tools are now created per-corpus in get_tools_for_configs()
+            logger.warning(f"⚠️ get_tool() called for RAG tool - this should be handled in get_tools_for_configs()")
+            return None
 
         elif tool_config.tool_type == "agent":
             # For agent tools, return a reference that can call another agent
@@ -80,25 +84,40 @@ class ToolRegistry:
 
         return None
 
-    def _create_rag_tool(self, tool_config: ToolConfig, corpuses: list) -> Optional[Callable]:
+    def _create_rag_tool_for_single_corpus(self, corpus: CorpusConfig) -> Optional[Callable]:
         """
-        Create a RAG tool with bound corpuses.
-
+        Create a RAG tool for a SINGLE corpus.
+        
+        This method creates one tool per corpus, allowing the agent to 
+        explicitly choose which knowledge base to search.
+        
         Args:
-            tool_config: The tool configuration
-            corpuses: List of corpus configurations
-
+            corpus: Single corpus configuration
+            
         Returns:
-            A callable RAG tool function
+            A callable RAG tool function with corpus-specific name
         """
         from src.infrastructure.tools.rag_tool import create_rag_tool
-
-        if not corpuses:
-            print(f"Warning: RAG tool {tool_config.tool_name} has no corpuses configured")
+        
+        if not corpus.enabled:
+            logger.warning(f"⏭️ Skipping disabled corpus: {corpus.corpus_name}")
             return None
-
-        rag_tool = create_rag_tool(corpuses)
-        return rag_tool
+        
+        if not corpus.vertex_corpus_name:
+            logger.warning(f"⏭️ Skipping corpus without vertex_corpus_name: {corpus.corpus_name}")
+            return None
+        
+        try:
+            rag_tool = create_rag_tool(corpus)
+            
+            tool_name = rag_tool.__name__ if hasattr(rag_tool, '__name__') else f"search_{corpus.corpus_name}"
+            logger.info(f"✅ Created RAG tool: {tool_name} for corpus '{corpus.display_name}'")
+            
+            return rag_tool
+            
+        except Exception as e:
+            logger.error(f"❌ Error creating RAG tool for {corpus.corpus_name}: {e}", exc_info=True)
+            return None
 
     def _create_agent_tool(self, tool_config: ToolConfig, agent_service: Any) -> Optional[Callable]:
         """
@@ -112,17 +131,15 @@ class ToolRegistry:
             A callable that invokes another agent
         """
         if not agent_service:
-            print(f"Warning: Agent tool {tool_config.tool_name} requires agent_service")
+            logger.warning(f"⚠️ Agent tool {tool_config.tool_name} requires agent_service")
             return None
 
-        # Get the target agent ID from function_name or parameters
         target_agent_id = tool_config.function_name or tool_config.parameters.get("agent_id")
 
         if not target_agent_id:
-            print(f"Warning: Agent tool {tool_config.tool_name} has no target agent_id")
+            logger.warning(f"⚠️ Agent tool {tool_config.tool_name} has no target agent_id")
             return None
 
-        # Create a function that delegates to the target agent
         async def delegate_to_agent(prompt: str, **kwargs) -> dict[str, Any]:
             """Delegate task to another agent."""
             try:
@@ -152,7 +169,6 @@ class ToolRegistry:
             The loaded tool function or None
         """
         try:
-            # Expect parameters to have 'module' and optionally 'attribute'
             module_name = tool_config.parameters.get("module")
             attr_name = tool_config.parameters.get("attribute", tool_config.function_name)
 
@@ -166,7 +182,7 @@ class ToolRegistry:
             return module
 
         except (ImportError, AttributeError) as e:
-            print(f"Error loading third-party tool {tool_config.tool_name}: {e}")
+            logger.error(f"❌ Error loading third-party tool {tool_config.tool_name}: {e}")
             return None
 
     def list_tools(self) -> list[str]:
@@ -186,6 +202,11 @@ class ToolRegistry:
     ) -> list[Any]:
         """
         Get all tool functions for a list of tool configurations.
+        
+        ✅ NEW BEHAVIOR FOR RAG TOOLS:
+        Instead of creating one RAG tool that searches all corpuses,
+        this method creates ONE TOOL PER CORPUS, allowing the agent
+        to explicitly choose which knowledge base to search.
 
         Args:
             tool_configs: List of tool configurations
@@ -196,8 +217,25 @@ class ToolRegistry:
             List of tool functions (excluding None values)
         """
         tools = []
+        
         for config in tool_configs:
-            tool = self.get_tool(config, corpuses=corpuses, agent_service=agent_service)
-            if tool is not None:
-                tools.append(tool)
+            if config.tool_type == "rag":
+                if corpuses:
+                    logger.info(f"🔧 Creating RAG tools: 1 tool per corpus ({len(corpuses)} total)")
+                    
+                    for corpus in corpuses:
+                        rag_tool = self._create_rag_tool_for_single_corpus(corpus)
+                        if rag_tool is not None:
+                            tools.append(rag_tool)
+                            
+                    logger.info(f"✅ Created {len([t for t in tools if callable(t)])} RAG tools")
+                else:
+                    logger.warning(f"⚠️ RAG tool '{config.tool_name}' has no corpuses configured")
+            
+            else:
+                tool = self.get_tool(config, corpuses=corpuses, agent_service=agent_service)
+                if tool is not None:
+                    tools.append(tool)
+        
+        logger.info(f"📦 Total tools loaded: {len(tools)}")
         return tools
