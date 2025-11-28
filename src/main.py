@@ -26,6 +26,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from src.application.api import router
 from src.application.api.teams_routes import router as teams_router
 from src.application.api.tabs_routes import router as tabs_router
+from src.application.api.auth_routes import router as auth_router
 from src.application.api.group_mapping_routes import router as group_mapping_router
 from src.application.di import get_container, close_container
 
@@ -100,8 +101,10 @@ app.add_middleware(
 app.include_router(router, prefix="/api/v1")
 # Legacy bot routes (can be deprecated once tabs are fully migrated)
 app.include_router(teams_router, prefix="/api/v1", tags=["teams-bot"])
-# New Teams Tabs routes (replacement for bot framework)
-app.include_router(tabs_router, prefix="/api/v1", tags=["teams-tabs"])
+# New Teams Tabs + Web routes (replacement for bot framework)
+app.include_router(tabs_router, prefix="/api/v1", tags=["teams-tabs", "web"])
+# OAuth2 authentication routes for web application
+app.include_router(auth_router, prefix="/api/v1", tags=["auth"])
 app.include_router(group_mapping_router, prefix="/api/v1", tags=["group-mappings"])
 
 
@@ -122,7 +125,12 @@ async def health():
     return {
         "status": "healthy",
         "version": "2.0.0",
-        "mode": "dual (bot + tabs)",
+        "mode": "multi (bot + tabs + web)",
+        "authentication": {
+            "teams_bot": True,
+            "teams_sso": True,
+            "web_oauth2": True
+        },
         "file_support": {
             "pdf": True,
             "docx": True,
@@ -131,7 +139,11 @@ async def health():
         "endpoints": {
             "bot": "/api/v1/teams/message",
             "tabs": "/api/v1/tabs/invoke",
-            "tabs_health": "/api/v1/tabs/health"
+            "tabs_health": "/api/v1/tabs/health",
+            "auth_login": "/api/v1/auth/login-url",
+            "auth_callback": "/api/v1/auth/callback",
+            "auth_me": "/api/v1/auth/me",
+            "auth_status": "/api/v1/auth/status"
         }
     }
 

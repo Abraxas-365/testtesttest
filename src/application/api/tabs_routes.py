@@ -1,15 +1,15 @@
 """
-API routes for Microsoft Teams Tabs integration.
-Replaces Azure Bot Framework with direct REST API calls.
+API routes for Teams Tabs and Web Application.
+Supports both Teams SSO (JWT tokens) and Web OAuth2 (session cookies).
 """
 
 import os
 import logging
 from typing import Optional
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Request
 from pydantic import BaseModel
 
-from src.middleware.teams_auth import validate_teams_token, get_user_from_token
+from src.middleware.teams_auth import require_auth, optional_auth
 from src.application.di import get_container
 from src.services.teams_integration import TeamsAgentIntegration
 
@@ -38,34 +38,34 @@ class TabMessageResponse(BaseModel):
 
 @router.post("/tabs/invoke", response_model=TabMessageResponse)
 async def process_tab_message(
-    request: TabMessageRequest,
-    token_data: dict = Depends(validate_teams_token)
+    tab_request: TabMessageRequest,
+    request: Request,
+    user: dict = Depends(require_auth)
 ):
     """
-    Process message from Teams Tab.
+    Process message from Teams Tab or Web Application.
 
     This endpoint receives messages from the React frontend,
-    validates authentication via Teams SSO, and routes to the appropriate agent.
-    
-    **Authentication:** Requires valid Teams SSO token in Authorization header.
+    validates authentication via Teams SSO or web session, and routes to the appropriate agent.
+
+    **Authentication:** Requires valid Teams SSO token OR web session cookie.
     """
     try:
-        # Extract user information from validated token
-        user_info = get_user_from_token(token_data)
-        user_object_id = user_info["user_id"]
-        user_name = user_info["name"]
-        user_email = user_info["email"]
+        # Extract user information from authenticated user
+        user_object_id = user["user_id"]
+        user_name = user["name"]
+        user_email = user["email"]
 
         logger.info("="*60)
         logger.info("📨 TAB MESSAGE RECEIVED")
         logger.info("="*60)
         logger.info(f"👤 User: {user_name} ({user_email})")
         logger.info(f"🆔 User ID: {user_object_id}")
-        logger.info(f"💬 Prompt: {request.prompt[:100]}...")
-        logger.info(f"🤖 Agent: {request.agent_name}")
-        logger.info(f"📝 Session: {request.session_id}")
-        logger.info(f"🎯 Mode: {request.mode}")
-        logger.info(f"📂 Source: {request.source}")
+        logger.info(f"💬 Prompt: {tab_request.prompt[:100]}...")
+        logger.info(f"🤖 Agent: {tab_request.agent_name}")
+        logger.info(f"📝 Session: {tab_request.session_id}")
+        logger.info(f"🎯 Mode: {tab_request.mode}")
+        logger.info(f"📂 Source: {tab_request.source}")
 
         # Get container and services
         container = get_container()
@@ -80,10 +80,10 @@ async def process_tab_message(
 
         # Process message using existing agent routing logic
         result = await teams_integration.process_message(
-            user_message=request.prompt,
+            user_message=tab_request.prompt,
             aad_user_id=user_object_id,
             user_name=user_name,
-            session_id=request.session_id or f"tab-{user_object_id}",
+            session_id=tab_request.session_id or f"tab-{user_object_id}",
             from_data={"aadObjectId": user_object_id}
         )
 
@@ -95,7 +95,7 @@ async def process_tab_message(
             )
 
         response_text = result.get("response", "No response from agent")
-        agent_name = result.get("agent_name", request.agent_name)
+        agent_name = result.get("agent_name", tab_request.agent_name)
         agent_area = result.get("agent_area", "general")
 
         logger.info("="*60)
@@ -113,8 +113,8 @@ async def process_tab_message(
                 "user_id": user_object_id,
                 "user_name": user_name,
                 "user_email": user_email,
-                "mode": request.mode,
-                "source": request.source,
+                "mode": tab_request.mode,
+                "source": tab_request.source,
             }
         )
 
@@ -134,65 +134,66 @@ async def process_tab_message(
 @router.get("/tabs/health")
 async def tabs_health():
     """
-    Health check endpoint for Teams Tabs integration.
-    
+    Health check endpoint for Teams Tabs and Web Application.
+
     Returns service status and configuration info.
     """
     return {
         "status": "healthy",
-        "service": "Teams Tab Backend",
+        "service": "Teams Tab + Web Backend",
         "version": "2.0.0",
-        "authentication": "Teams SSO (JWT)",
+        "authentication": "Multi-mode (Teams SSO + Web OAuth2)",
         "features": {
-            "sso_auth": True,
+            "teams_sso": True,
+            "web_oauth2": True,
+            "teams_bot": True,  # Legacy support
             "teams_integration": True,
             "agent_routing": True,
             "session_management": True,
-            "file_support": False,  # Not implemented for tabs yet
+            "file_support": False,
         },
         "endpoints": {
             "invoke": "/api/v1/tabs/invoke",
             "health": "/api/v1/tabs/health",
-            "user_profile": "/api/v1/tabs/user/profile"
+            "user_profile": "/api/v1/tabs/user/profile",
+            "auth_login": "/api/v1/auth/login-url",
+            "auth_callback": "/api/v1/auth/callback",
+            "auth_me": "/api/v1/auth/me",
+            "auth_status": "/api/v1/auth/status"
         }
     }
 
 
 @router.get("/tabs/user/profile")
-async def get_user_profile(token_data: dict = Depends(validate_teams_token)):
+async def get_user_profile(request: Request, user: dict = Depends(require_auth)):
     """
-    Get authenticated user's profile information from token.
-    
-    This endpoint demonstrates accessing user info from the validated JWT token.
-    
-    **Authentication:** Requires valid Teams SSO token in Authorization header.
+    Get authenticated user's profile information.
+
+    **Authentication:** Requires valid Teams SSO token OR web session cookie.
     """
-    user_info = get_user_from_token(token_data)
-    
-    logger.info(f"📋 Profile requested for: {user_info['email']}")
-    
+    logger.info(f"📋 Profile requested for: {user['email']}")
+
     return {
-        "user_id": user_info["user_id"],
-        "name": user_info["name"],
-        "email": user_info["email"],
-        "tenant_id": user_info["tenant_id"],
-        "authenticated": True,
-        "source": "teams_sso"
+        "user_id": user["user_id"],
+        "name": user["name"],
+        "email": user["email"],
+        "tenant_id": user.get("tenant_id"),
+        "authenticated": True
     }
 
 
 @router.post("/tabs/config")
-async def get_tab_config(token_data: dict = Depends(validate_teams_token)):
+async def get_tab_config(request: Request, user: dict = Depends(require_auth)):
     """
-    Get configuration for Teams Tab.
-    
+    Get configuration for Teams Tab or Web Application.
+
     Returns frontend configuration based on authenticated user's permissions.
+
+    **Authentication:** Requires valid Teams SSO token OR web session cookie.
     """
-    user_info = get_user_from_token(token_data)
-    
     # You can customize this based on user's group membership, roles, etc.
     return {
-        "user": user_info,
+        "user": user,
         "available_agents": [
             "search_assistant",
             "general_assistant"
