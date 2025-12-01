@@ -13,22 +13,35 @@ import secrets
 logger = logging.getLogger(__name__)
 security = HTTPBearer()
 
-# Simple in-memory session store (use Redis in production)
-SESSION_STORE: Dict[str, Dict] = {}
+# JWT Configuration
+JWT_ALGORITHM = "HS256"
+JWT_EXPIRATION_HOURS = 24
+
+
+def get_jwt_secret_key() -> str:
+    """Get JWT secret key from environment variables."""
+    secret_key = os.getenv("JWT_SECRET_KEY")
+
+    if not secret_key:
+        logger.warning("⚠️ JWT_SECRET_KEY not set, using fallback (NOT SECURE FOR PRODUCTION)")
+        # Fallback for development only - MUST be set in production
+        secret_key = "dev-secret-key-CHANGE-IN-PRODUCTION-" + os.getenv("GOOGLE_CLOUD_PROJECT", "dev")
+
+    return secret_key
 
 
 def get_azure_config() -> Dict[str, str]:
     """Get Azure AD configuration from environment variables."""
     tenant_id = os.getenv("AZURE_TENANT_ID")
     client_id = os.getenv("AZURE_CLIENT_ID")
-    
+
     if not tenant_id or not client_id:
         logger.error("❌ AZURE_TENANT_ID or AZURE_CLIENT_ID not set")
         raise HTTPException(
             status_code=500,
             detail="Azure AD configuration missing. Please set AZURE_TENANT_ID and AZURE_CLIENT_ID environment variables."
         )
-    
+
     return {
         "tenant_id": tenant_id,
         "client_id": client_id,
@@ -117,101 +130,168 @@ def get_user_from_token(token_data: dict) -> dict:
 
 
 # ============================================================================
-# SESSION MANAGEMENT (for Web OAuth2 flow)
+# JWT TOKEN MANAGEMENT (for Web OAuth2 flow)
 # ============================================================================
 
-def create_session(user_data: dict) -> str:
-    """Create a new session and return session ID."""
-    session_id = secrets.token_urlsafe(32)
-    SESSION_STORE[session_id] = {
-        "user_data": user_data,
-        "created_at": datetime.utcnow(),
-        "expires_at": datetime.utcnow() + timedelta(hours=24)
-    }
-    logger.info(f"✅ Session created for user: {user_data.get('email')}")
-    return session_id
+def create_access_token(user_data: dict, expires_delta: Optional[timedelta] = None) -> str:
+    """
+    Create a JWT access token for authenticated user.
+
+    Args:
+        user_data: User information to encode in token
+        expires_delta: Optional custom expiration time
+
+    Returns:
+        str: Encoded JWT token
+    """
+    to_encode = user_data.copy()
+
+    # Set expiration
+    if expires_delta:
+        expire = datetime.utcnow() + expires_delta
+    else:
+        expire = datetime.utcnow() + timedelta(hours=JWT_EXPIRATION_HOURS)
+
+    to_encode.update({
+        "exp": expire,
+        "iat": datetime.utcnow(),
+        "iss": "grupodc-agent-backend",  # Issuer
+        "type": "access_token"
+    })
+
+    # Encode JWT
+    secret_key = get_jwt_secret_key()
+    encoded_jwt = jwt.encode(to_encode, secret_key, algorithm=JWT_ALGORITHM)
+
+    logger.info(f"✅ JWT created for user: {user_data.get('email')} (expires: {expire})")
+
+    return encoded_jwt
 
 
-def get_session(session_id: str) -> Optional[dict]:
-    """Get session data by session ID."""
-    session = SESSION_STORE.get(session_id)
-    if not session:
-        return None
+def decode_access_token(token: str) -> dict:
+    """
+    Decode and validate a JWT access token.
 
-    # Check if session expired
-    if datetime.utcnow() > session["expires_at"]:
-        del SESSION_STORE[session_id]
-        return None
+    Args:
+        token: JWT token string
 
-    return session["user_data"]
+    Returns:
+        dict: Decoded token payload
 
+    Raises:
+        HTTPException: If token is invalid or expired
+    """
+    try:
+        secret_key = get_jwt_secret_key()
 
-def delete_session(session_id: str):
-    """Delete a session."""
-    if session_id in SESSION_STORE:
-        del SESSION_STORE[session_id]
+        # Decode and validate JWT
+        payload = jwt.decode(
+            token,
+            secret_key,
+            algorithms=[JWT_ALGORITHM],
+            options={
+                "verify_signature": True,
+                "verify_exp": True,
+                "require_exp": True,
+                "require_iat": True
+            }
+        )
+
+        # Verify issuer
+        if payload.get("iss") != "grupodc-agent-backend":
+            raise HTTPException(status_code=401, detail="Invalid token issuer")
+
+        # Verify token type
+        if payload.get("type") != "access_token":
+            raise HTTPException(status_code=401, detail="Invalid token type")
+
+        logger.debug(f"✅ JWT validated for user: {payload.get('email')}")
+
+        return payload
+
+    except jwt.ExpiredSignatureError:
+        logger.error("❌ JWT expired")
+        raise HTTPException(status_code=401, detail="Token expired")
+    except jwt.InvalidTokenError as e:
+        logger.error(f"❌ Invalid JWT: {str(e)}")
+        raise HTTPException(status_code=401, detail=f"Invalid token: {str(e)}")
+    except Exception as e:
+        logger.error(f"❌ JWT validation error: {str(e)}")
+        raise HTTPException(status_code=401, detail="Authentication failed")
 
 
 # ============================================================================
-# MULTI-MODE AUTHENTICATION (Teams SSO + Web Session + Optional)
+# MULTI-MODE AUTHENTICATION (Teams SSO JWT + Web OAuth2 JWT)
 # ============================================================================
 
 async def get_user_from_request(request: Request) -> Optional[dict]:
     """
-    Try to get user from multiple sources (in order of priority):
-    1. Bearer token (Teams SSO)
-    2. Session cookie (Web OAuth2)
+    Try to get user from multiple JWT token sources (in order of priority):
+    1. Teams SSO JWT (signed by Microsoft with RS256)
+    2. Web OAuth2 JWT (signed by backend with HS256)
 
     Returns None if no valid authentication found.
     """
-    # Try Teams SSO token first
     auth_header = request.headers.get("Authorization")
-    if auth_header and auth_header.startswith("Bearer "):
+    if not auth_header or not auth_header.startswith("Bearer "):
+        return None
+
+    token = auth_header.replace("Bearer ", "")
+
+    # Try Teams SSO token (Microsoft JWT with RS256)
+    try:
+        config = get_azure_config()
+        jwks_client = PyJWKClient(config["jwks_uri"], cache_keys=True)
+        signing_key = jwks_client.get_signing_key_from_jwt(token)
+
+        decoded_token = jwt.decode(
+            token,
+            signing_key.key,
+            algorithms=["RS256"],
+            audience=config["client_id"],
+            issuer=config["issuer"],
+            options={
+                "verify_signature": True,
+                "verify_exp": True,
+                "verify_aud": True,
+                "verify_iss": True,
+            }
+        )
+        logger.info(f"✅ Authenticated via Teams SSO: {decoded_token.get('preferred_username')}")
+        return get_user_from_token(decoded_token)
+
+    except Exception as teams_error:
+        logger.debug(f"Not a Teams SSO token: {str(teams_error)}")
+
+        # Try Web OAuth2 JWT (our own JWT with HS256)
         try:
-            token = auth_header.replace("Bearer ", "")
-            config = get_azure_config()
-            jwks_client = PyJWKClient(config["jwks_uri"], cache_keys=True)
-            signing_key = jwks_client.get_signing_key_from_jwt(token)
+            decoded_token = decode_access_token(token)
+            logger.info(f"✅ Authenticated via Web OAuth2 JWT: {decoded_token.get('email')}")
 
-            decoded_token = jwt.decode(
-                token,
-                signing_key.key,
-                algorithms=["RS256"],
-                audience=config["client_id"],
-                issuer=config["issuer"],
-                options={
-                    "verify_signature": True,
-                    "verify_exp": True,
-                    "verify_aud": True,
-                    "verify_iss": True,
-                }
-            )
-            logger.info(f"✅ Authenticated via Teams SSO: {decoded_token.get('preferred_username')}")
-            return get_user_from_token(decoded_token)
-        except Exception as e:
-            logger.debug(f"Bearer token validation failed: {str(e)}")
+            # Return user data in standard format
+            return {
+                "user_id": decoded_token.get("user_id"),
+                "name": decoded_token.get("name"),
+                "email": decoded_token.get("email"),
+                "tenant_id": decoded_token.get("tenant_id"),
+            }
 
-    # Try session cookie
-    session_id = request.cookies.get("session_id")
-    if session_id:
-        user_data = get_session(session_id)
-        if user_data:
-            logger.info(f"✅ Authenticated via session: {user_data.get('email')}")
-            return user_data
+        except Exception as jwt_error:
+            logger.debug(f"Not a valid OAuth2 JWT: {str(jwt_error)}")
 
     return None
 
 
 async def require_auth(request: Request) -> dict:
     """
-    Require authentication from any source.
+    Require authentication from any JWT token source.
     Raises HTTPException if not authenticated.
     """
     user = await get_user_from_request(request)
     if not user:
         raise HTTPException(
             status_code=401,
-            detail="Authentication required. Please provide a valid Bearer token or login session."
+            detail="Authentication required. Please provide a valid JWT token in Authorization header."
         )
     return user
 

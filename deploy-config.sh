@@ -54,6 +54,14 @@ export GRAPH_CLIENT_ID="$AZURE_CLIENT_ID"
 export GRAPH_CLIENT_SECRET="$AZURE_CLIENT_SECRET"
 
 # ============================================================================
+# JWT CONFIGURATION
+# ============================================================================
+
+# JWT Secret Key for signing OAuth2 web tokens
+# Generate a strong random key for production
+export JWT_SECRET_KEY="$(openssl rand -base64 32)"
+
+# ============================================================================
 # DEPLOYMENT OPTIONS
 # ============================================================================
 

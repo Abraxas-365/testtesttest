@@ -239,6 +239,17 @@ else
     --replication-policy="automatic"
 fi
 
+# JWT Secret Key (for signing OAuth2 web tokens)
+if gcloud secrets describe jwt-secret-key &>/dev/null; then
+  echo "Updating existing jwt-secret-key..."
+  echo -n "$JWT_SECRET_KEY" | gcloud secrets versions add jwt-secret-key --data-file=-
+else
+  echo "Creating new jwt-secret-key..."
+  echo -n "$JWT_SECRET_KEY" | gcloud secrets create jwt-secret-key \
+    --data-file=- \
+    --replication-policy="automatic"
+fi
+
 # Microsoft Graph Client Secret (if different from Azure)
 if [ "$GRAPH_CLIENT_SECRET" != "$AZURE_CLIENT_SECRET" ]; then
   if gcloud secrets describe graph-client-secret &>/dev/null; then
@@ -254,7 +265,7 @@ fi
 
 # Grant Cloud Run access to secrets
 echo "Granting Cloud Run access to secrets..."
-for secret in db-password azure-client-secret graph-client-secret; do
+for secret in db-password azure-client-secret jwt-secret-key graph-client-secret; do
   if gcloud secrets describe $secret &>/dev/null; then
     gcloud secrets add-iam-policy-binding $secret \
       --member="serviceAccount:$COMPUTE_SA" \
@@ -301,6 +312,7 @@ ENV_VARS="$ENV_VARS,GRAPH_CLIENT_ID=$GRAPH_CLIENT_ID"
 # Build secrets string
 SECRETS="DB_PASSWORD=db-password:latest"
 SECRETS="$SECRETS,AZURE_CLIENT_SECRET=azure-client-secret:latest"
+SECRETS="$SECRETS,JWT_SECRET_KEY=jwt-secret-key:latest"
 
 # Add Graph secret if different
 if [ "$GRAPH_CLIENT_SECRET" != "$AZURE_CLIENT_SECRET" ]; then

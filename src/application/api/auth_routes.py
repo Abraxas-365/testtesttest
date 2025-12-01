@@ -1,4 +1,4 @@
-"""OAuth2 Authentication Routes for Web Application"""
+"""OAuth2 Authentication Routes for Web Application (JWT-based)"""
 
 import os
 import logging
@@ -11,8 +11,7 @@ from urllib.parse import urlencode
 
 from src.middleware.teams_auth import (
     get_azure_config,
-    create_session,
-    delete_session,
+    create_access_token,
     get_user_from_request,
     require_auth,
     optional_auth
@@ -100,7 +99,6 @@ async def get_login_url(redirect_uri: Optional[str] = None):
 async def auth_callback(
     code: str,
     state: str,
-    response: Response,
     error: Optional[str] = None,
     error_description: Optional[str] = None
 ):
@@ -110,20 +108,18 @@ async def auth_callback(
     This endpoint:
     1. Receives the authorization code from Microsoft
     2. Exchanges it for an access token
-    3. Gets user information
-    4. Creates a session
-    5. Sets a session cookie
-    6. Redirects to the frontend
+    3. Gets user information from ID token
+    4. Creates a JWT access token
+    5. Redirects to frontend with JWT in URL fragment
 
     Args:
         code: Authorization code from Microsoft
         state: CSRF state token
-        response: FastAPI Response object
         error: Optional error from Microsoft
         error_description: Optional error description
 
     Returns:
-        Redirect to frontend with session cookie set
+        Redirect to frontend with JWT token in URL fragment (#token=xxx)
     """
     # Check for errors from Microsoft
     if error:
@@ -193,26 +189,18 @@ async def auth_callback(
                 "tenant_id": decoded_id_token.get("tid"),
             }
 
-            # Create session
-            session_id = create_session(user_data)
+            # Create JWT access token
+            access_token_jwt = create_access_token(user_data)
 
-            # Set session cookie
+            # Redirect to frontend with JWT in URL fragment (hash)
+            # Using fragment (#) is more secure than query params (?)
+            # because fragments are not sent to the server on redirect
             frontend_url = os.getenv("FRONTEND_URL", "http://localhost:5173")
-            redirect_response = RedirectResponse(url=f"{frontend_url}/auth/success")
-
-            # Set secure cookie
-            redirect_response.set_cookie(
-                key="session_id",
-                value=session_id,
-                httponly=True,
-                secure=True,  # Only over HTTPS
-                samesite="lax",
-                max_age=86400,  # 24 hours
-            )
+            redirect_url = f"{frontend_url}/auth/success#token={access_token_jwt}"
 
             logger.info(f"✅ User logged in successfully: {user_data.get('email')}")
 
-            return redirect_response
+            return RedirectResponse(url=redirect_url)
 
     except Exception as e:
         logger.error(f"❌ Authentication callback error: {str(e)}")
@@ -223,29 +211,28 @@ async def auth_callback(
 
 
 @router.post("/auth/logout")
-async def logout(response: Response, user: dict = None):
+async def logout():
     """
-    Logout endpoint that clears the session.
+    Logout endpoint for JWT-based authentication.
+
+    Note: With JWT tokens, logout is handled client-side by deleting the token
+    from localStorage/sessionStorage. This endpoint exists for consistency
+    but doesn't need to do anything on the server side.
+
+    The client should:
+    1. Delete the JWT token from storage
+    2. Clear any cached user data
+    3. Redirect to login page
 
     Returns:
         Success message
     """
-    try:
-        # Try to get session ID from cookie
-        session_id = response.headers.get("session_id")
-        if session_id:
-            delete_session(session_id)
+    logger.info(f"✅ Logout request received (JWT-based, no server-side action needed)")
 
-        # Clear session cookie
-        response.delete_cookie("session_id")
-
-        logger.info(f"✅ User logged out successfully")
-
-        return {"message": "Logged out successfully"}
-
-    except Exception as e:
-        logger.error(f"❌ Logout error: {str(e)}")
-        return {"message": "Logged out (with errors)"}
+    return {
+        "message": "Logged out successfully",
+        "note": "Please delete the JWT token from client storage"
+    }
 
 
 @router.get("/auth/me", response_model=UserInfoResponse)
