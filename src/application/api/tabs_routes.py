@@ -141,7 +141,7 @@ async def tabs_health():
     return {
         "status": "healthy",
         "service": "Teams Tab + Web Backend",
-        "version": "2.0.0",
+        "version": "2.1.0",
         "authentication": "Multi-mode (Teams SSO + Web OAuth2)",
         "features": {
             "teams_sso": True,
@@ -150,7 +150,8 @@ async def tabs_health():
             "teams_integration": True,
             "agent_routing": True,
             "session_management": True,
-            "file_support": False,
+            "file_support": True,
+            "multi_document_upload": True,
         },
         "endpoints": {
             "invoke": "/api/v1/tabs/invoke",
@@ -159,7 +160,10 @@ async def tabs_health():
             "auth_login": "/api/v1/auth/login-url",
             "auth_callback": "/api/v1/auth/callback",
             "auth_me": "/api/v1/auth/me",
-            "auth_status": "/api/v1/auth/status"
+            "auth_status": "/api/v1/auth/status",
+            "documents_presigned": "/api/v1/documents/presigned-url",
+            "documents_confirm": "/api/v1/documents/confirm-upload",
+            "documents_process": "/api/v1/documents/process"
         }
     }
 
@@ -199,12 +203,21 @@ async def get_tab_config(request: Request, user: dict = Depends(require_auth)):
             "general_assistant"
         ],
         "features": {
-            "file_upload": False,
+            "file_upload": True,
+            "multi_document_upload": True,
             "voice_input": False,
             "history": True
         },
         "ui_settings": {
             "theme": "auto",
-            "max_message_length": 4000
+            "max_message_length": 4000,
+            "max_file_size_mb": 50,
+            "max_files_per_request": 10
+        },
+        "document_endpoints": {
+            "presigned_url": "/api/v1/documents/presigned-url",
+            "confirm_upload": "/api/v1/documents/confirm-upload",
+            "process": "/api/v1/documents/process",
+            "supported_types": "/api/v1/documents/supported-types"
         }
     }

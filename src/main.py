@@ -28,6 +28,7 @@ from src.application.api.teams_routes import router as teams_router
 from src.application.api.tabs_routes import router as tabs_router
 from src.application.api.auth_routes import router as auth_router
 from src.application.api.group_mapping_routes import router as group_mapping_router
+from src.application.api.document_routes import router as document_router
 from src.application.di import get_container, close_container
 
 
@@ -106,6 +107,8 @@ app.include_router(tabs_router, prefix="/api/v1", tags=["teams-tabs", "web"])
 # OAuth2 authentication routes for web application
 app.include_router(auth_router, prefix="/api/v1", tags=["auth"])
 app.include_router(group_mapping_router, prefix="/api/v1", tags=["group-mappings"])
+# Document upload and processing routes
+app.include_router(document_router, prefix="/api/v1", tags=["documents"])
 
 
 @app.get("/")
@@ -124,7 +127,7 @@ async def health():
     """Health check."""
     return {
         "status": "healthy",
-        "version": "2.0.0",
+        "version": "2.1.0",
         "mode": "multi (bot + tabs + web)",
         "authentication": {
             "teams_bot": True,
@@ -134,7 +137,11 @@ async def health():
         "file_support": {
             "pdf": True,
             "docx": True,
-            "method": "gemini_native"
+            "images": True,
+            "excel": True,
+            "method": "gemini_native",
+            "multi_document": True,
+            "presigned_upload": True
         },
         "endpoints": {
             "bot": "/api/v1/teams/message",
@@ -143,7 +150,11 @@ async def health():
             "auth_login": "/api/v1/auth/login-url",
             "auth_callback": "/api/v1/auth/callback",
             "auth_me": "/api/v1/auth/me",
-            "auth_status": "/api/v1/auth/status"
+            "auth_status": "/api/v1/auth/status",
+            "documents_presigned": "/api/v1/documents/presigned-url",
+            "documents_confirm": "/api/v1/documents/confirm-upload",
+            "documents_process": "/api/v1/documents/process",
+            "documents_supported_types": "/api/v1/documents/supported-types"
         }
     }
 
