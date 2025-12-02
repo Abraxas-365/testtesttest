@@ -169,7 +169,7 @@ class MultiDocumentProcessor:
             )
 
         try:
-            logger.info(f"📚 Processing {len(documents)} document(s) with query: {user_query[:100]}...")
+            logger.info(f"📄 Processing {len(documents)} document(s) with query: {user_query[:100]}...")
 
             # Build content parts for Gemini
             content_parts = []
@@ -177,7 +177,7 @@ class MultiDocumentProcessor:
             # Add system context if provided
             if system_instruction:
                 content_parts.append(
-                    types.Part.from_text(f"System Context: {system_instruction}\n\n")
+                    types.Part(text=f"System Context: {system_instruction}\n\n")  # ✅ CORRECT SYNTAX
                 )
 
             # Add document context header
@@ -186,9 +186,7 @@ class MultiDocumentProcessor:
                 for doc in documents
             ])
             content_parts.append(
-                types.Part.from_text(
-                    f"The following {len(documents)} document(s) have been provided for analysis:\n{doc_list}\n\n"
-                )
+                types.Part(text=f"The following {len(documents)} document(s) have been provided for analysis:\n{doc_list}\n\n")  # ✅ CORRECT SYNTAX
             )
 
             # Fetch and add each document
@@ -206,17 +204,19 @@ class MultiDocumentProcessor:
                     # Fetch document bytes from GCS
                     doc_bytes = await self.storage_service.get_document_bytes(doc.blob_path)
 
-                    # Add document part
+                    # Add document part with inline_data
                     content_parts.append(
-                        types.Part.from_bytes(
-                            data=doc_bytes,
-                            mime_type=doc.content_type,
-                        )
+                        types.Part(
+                            inline_data=types.Blob(
+                                mime_type=doc.content_type,
+                                data=doc_bytes
+                            )
+                        )  # ✅ CORRECT SYNTAX FOR BINARY DATA
                     )
 
                     # Add filename label for context
                     content_parts.append(
-                        types.Part.from_text(f"\n[Above: {doc.filename}]\n\n")
+                        types.Part(text=f"\n[Above: {doc.filename}]\n\n")  # ✅ CORRECT SYNTAX
                     )
 
                     processed_count += 1
@@ -235,7 +235,7 @@ class MultiDocumentProcessor:
 
             # Add the user's query
             content_parts.append(
-                types.Part.from_text(f"\n\nUser Question: {user_query}")
+                types.Part(text=f"\n\nUser Question: {user_query}")  # ✅ CORRECT SYNTAX
             )
 
             # Call Gemini

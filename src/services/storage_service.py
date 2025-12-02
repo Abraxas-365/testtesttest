@@ -3,17 +3,22 @@ Google Cloud Storage Service for document uploads.
 
 Provides presigned URL generation for secure client-side uploads
 and document retrieval for processing.
+
+Works with Cloud Run default credentials (no private key needed).
 """
 
 import os
 import logging
 import uuid
+import requests  # For metadata server calls
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
 from dataclasses import dataclass
 
 from google.cloud import storage
 from google.cloud.storage import Blob
+from google.auth import default, compute_engine
+from google.auth.transport import requests as auth_requests
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +39,7 @@ class StorageService:
     Google Cloud Storage service for document management.
 
     Handles:
-    - Presigned URL generation for uploads
+    - Presigned URL generation for uploads (IAM-based signing)
     - Document retrieval for Gemini processing
     - Document lifecycle management
     """
@@ -54,10 +59,61 @@ class StorageService:
         self.project_id = project_id or os.getenv("GOOGLE_CLOUD_PROJECT")
         self.bucket_name = bucket_name or os.getenv("GCS_BUCKET_NAME", f"{self.project_id}-documents")
 
-        self.client = storage.Client(project=self.project_id)
+        # Initialize credentials and client
+        self.credentials, _ = default(scopes=['https://www.googleapis.com/auth/cloud-platform'])
+        self.client = storage.Client(project=self.project_id, credentials=self.credentials)
         self.bucket = self.client.bucket(self.bucket_name)
 
+        # Get service account email (needed for signing)
+        self._service_account_email = self._get_service_account_email()
+
         logger.info(f"✅ StorageService initialized with bucket: {self.bucket_name}")
+        logger.info(f"🔑 Using service account: {self._service_account_email}")
+
+    def _get_service_account_email(self) -> str:
+        """
+        Get the service account email for signing URLs.
+        
+        Works with both Cloud Run (metadata server) and local service accounts.
+        
+        Returns:
+            Service account email address
+        """
+        # If using Compute Engine credentials (Cloud Run), get email from metadata server
+        if isinstance(self.credentials, compute_engine.Credentials):
+            try:
+                metadata_url = "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/email"
+                headers = {"Metadata-Flavor": "Google"}
+                response = requests.get(metadata_url, headers=headers, timeout=5)
+                response.raise_for_status()
+                email = response.text.strip()
+                logger.info(f"📧 Retrieved service account email from metadata: {email}")
+                return email
+            except Exception as e:
+                logger.error(f"❌ Failed to get service account email from metadata: {e}")
+                raise RuntimeError(
+                    "Could not retrieve service account email from metadata server. "
+                    "Ensure this is running on Cloud Run or GCE."
+                ) from e
+        
+        # For service account credentials (local development with key file)
+        elif hasattr(self.credentials, 'service_account_email'):
+            email = self.credentials.service_account_email
+            logger.info(f"📧 Using service account email from credentials: {email}")
+            return email
+        
+        else:
+            raise RuntimeError(
+                f"Unsupported credential type: {type(self.credentials)}. "
+                "Use either Compute Engine credentials (Cloud Run) or Service Account credentials."
+            )
+
+    def _ensure_token_valid(self):
+        """Ensure the access token is valid, refresh if needed."""
+        if not self.credentials.valid:
+            logger.info("🔄 Refreshing access token...")
+            self.credentials.refresh(auth_requests.Request())
+            logger.info("✅ Token refreshed")
 
     def _generate_document_id(self) -> str:
         """Generate a unique document ID."""
@@ -81,6 +137,8 @@ class StorageService:
     ) -> Dict[str, Any]:
         """
         Generate a presigned URL for uploading a document.
+        
+        Uses IAM-based signing (works with Cloud Run default credentials).
 
         Args:
             user_id: User identifier for organizing uploads
@@ -96,15 +154,24 @@ class StorageService:
 
         blob = self.bucket.blob(blob_path)
 
-        # Generate signed URL for PUT request
+        # Ensure token is valid
+        self._ensure_token_valid()
+
+        # Generate signed URL for PUT request with IAM-based signing
         expiration = timedelta(minutes=expiration_minutes)
 
-        upload_url = blob.generate_signed_url(
-            version="v4",
-            expiration=expiration,
-            method="PUT",
-            content_type=content_type,
-        )
+        try:
+            upload_url = blob.generate_signed_url(
+                version="v4",
+                expiration=expiration,
+                method="PUT",
+                content_type=content_type,
+                service_account_email=self._service_account_email,  # 🔑 KEY FIX
+                access_token=self.credentials.token,  # 🔑 KEY FIX
+            )
+        except Exception as e:
+            logger.error(f"❌ Failed to generate signed URL: {e}")
+            raise RuntimeError(f"Could not generate presigned URL: {str(e)}") from e
 
         logger.info(f"📤 Generated presigned upload URL for document {document_id}")
 
@@ -125,6 +192,8 @@ class StorageService:
     ) -> str:
         """
         Generate a presigned URL for downloading a document.
+        
+        Uses IAM-based signing (works with Cloud Run default credentials).
 
         Args:
             blob_path: Path to the blob in GCS
@@ -135,13 +204,22 @@ class StorageService:
         """
         blob = self.bucket.blob(blob_path)
 
+        # Ensure token is valid
+        self._ensure_token_valid()
+
         expiration = timedelta(minutes=expiration_minutes)
 
-        download_url = blob.generate_signed_url(
-            version="v4",
-            expiration=expiration,
-            method="GET",
-        )
+        try:
+            download_url = blob.generate_signed_url(
+                version="v4",
+                expiration=expiration,
+                method="GET",
+                service_account_email=self._service_account_email,  # 🔑 KEY FIX
+                access_token=self.credentials.token,  # 🔑 KEY FIX
+            )
+        except Exception as e:
+            logger.error(f"❌ Failed to generate signed URL: {e}")
+            raise RuntimeError(f"Could not generate presigned URL: {str(e)}") from e
 
         return download_url
 
