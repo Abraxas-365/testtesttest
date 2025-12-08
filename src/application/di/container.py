@@ -8,13 +8,14 @@ from urllib.parse import quote_plus
 
 from google.adk.sessions import DatabaseSessionService
 
-from src.domain.ports import AgentRepository, CorpusRepository
+from src.domain.ports import AgentRepository, CorpusRepository, TextEditorRepository
 from src.domain.ports.group_mapping_repository import GroupMappingRepository
 from src.domain.services import AgentService
 from src.infrastructure.adapters.postgres import (
     PostgresAgentRepository,
     PostgresCorpusRepository,
     PostgresGroupMappingRepository,
+    PostgresTextEditorRepository,
 )
 from src.infrastructure.tools import ToolRegistry
 
@@ -34,6 +35,7 @@ class Container:
         self._repository: Optional[AgentRepository] = None
         self._corpus_repository: Optional[CorpusRepository] = None
         self._group_mapping_repository: Optional[GroupMappingRepository] = None
+        self._text_editor_repository: Optional[TextEditorRepository] = None
         self._tool_registry: Optional[ToolRegistry] = None
         self._agent_service: Optional[AgentService] = None
         self._session_service: Optional[DatabaseSessionService] = None
@@ -122,6 +124,33 @@ class Container:
             logger.info("✅ PostgresGroupMappingRepository initialized")
 
         return self._group_mapping_repository
+
+    async def get_text_editor_repository(self) -> TextEditorRepository:
+        """
+        Initialize and return the text editor repository.
+
+        Uses the same database connection pattern as other repositories.
+
+        Returns:
+            TextEditorRepository instance
+        """
+        if self._text_editor_repository is None:
+            db_host = os.getenv("DB_HOST", "localhost")
+            db_port = int(os.getenv("DB_PORT", "5432"))
+            db_name = os.getenv("DB_NAME", "agents_db")
+            db_user = os.getenv("DB_USER", "postgres")
+            db_password = os.getenv("DB_PASSWORD", "postgres")
+
+            self._text_editor_repository = await PostgresTextEditorRepository.create(
+                host=db_host,
+                port=db_port,
+                database=db_name,
+                user=db_user,
+                password=db_password,
+            )
+            logger.info("✅ PostgresTextEditorRepository initialized")
+
+        return self._text_editor_repository
 
     def get_tool_registry(self) -> ToolRegistry:
         """
@@ -221,7 +250,11 @@ class Container:
         if self._group_mapping_repository and isinstance(self._group_mapping_repository, PostgresGroupMappingRepository):
             await self._group_mapping_repository.pool.close()
             logger.info("✅ Group mapping repository closed")
-        
+
+        if self._text_editor_repository and isinstance(self._text_editor_repository, PostgresTextEditorRepository):
+            await self._text_editor_repository.close()
+            logger.info("✅ Text editor repository closed")
+
         if self._session_service:
             logger.info("✅ Session service cleanup (managed by ADK)")
 

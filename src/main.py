@@ -29,6 +29,7 @@ from src.application.api.tabs_routes import router as tabs_router
 from src.application.api.auth_routes import router as auth_router
 from src.application.api.group_mapping_routes import router as group_mapping_router
 from src.application.api.document_routes import router as document_router
+from src.application.api.text_editor_routes import router as text_editor_router
 from src.application.di import get_container, close_container
 
 
@@ -109,6 +110,8 @@ app.include_router(auth_router, prefix="/api/v1", tags=["auth"])
 app.include_router(group_mapping_router, prefix="/api/v1", tags=["group-mappings"])
 # Document upload and processing routes
 app.include_router(document_router, prefix="/api/v1", tags=["documents"])
+# AI Text Editor routes
+app.include_router(text_editor_router, prefix="/api/v1", tags=["ai-editor"])
 
 
 @app.get("/")
@@ -154,7 +157,11 @@ async def health():
             "documents_presigned": "/api/v1/documents/presigned-url",
             "documents_confirm": "/api/v1/documents/confirm-upload",
             "documents_process": "/api/v1/documents/process",
-            "documents_supported_types": "/api/v1/documents/supported-types"
+            "documents_supported_types": "/api/v1/documents/supported-types",
+            "ai_editor_stream": "/api/v1/ai-editor/stream",
+            "ai_editor_upload": "/api/v1/ai-editor/upload",
+            "ai_editor_chat": "/api/v1/ai-editor/chat",
+            "ai_editor_documents": "/api/v1/ai-editor/documents"
         }
     }
 

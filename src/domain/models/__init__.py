@@ -13,6 +13,14 @@ from .session_models import (
     SessionStatus,
     MessageRole,
 )
+from .text_editor_models import (
+    DiffType,
+    DiffSuggestion,
+    AttachmentInfo,
+    DocumentContext,
+    EditorDocument,
+    StreamEvent,
+)
 
 __all__ = [
     "AgentConfig",
@@ -26,4 +34,10 @@ __all__ = [
     "Message",
     "SessionStatus",
     "MessageRole",
+    "DiffType",
+    "DiffSuggestion",
+    "AttachmentInfo",
+    "DocumentContext",
+    "EditorDocument",
+    "StreamEvent",
 ]
