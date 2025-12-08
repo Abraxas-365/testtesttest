@@ -25,7 +25,10 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from src.application.api import router
 from src.application.api.teams_routes import router as teams_router
+from src.application.api.tabs_routes import router as tabs_router
+from src.application.api.auth_routes import router as auth_router
 from src.application.api.group_mapping_routes import router as group_mapping_router
+from src.application.api.document_routes import router as document_router
 from src.application.di import get_container, close_container
 
 
@@ -71,9 +74,25 @@ app = FastAPI(
 )
 
 # Add CORS middleware
+# Updated for Teams Tabs support with specific domain allowlist
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        # Teams domains
+        "https://teams.microsoft.com",
+        "https://*.teams.microsoft.com",
+        "https://*.teams.office.com",
+        "https://outlook.office.com",
+        "https://*.outlook.office.com",
+        # Local development
+        "http://localhost:5173",
+        "http://localhost:3000",
+        "http://localhost:8080",
+        # Add your deployed frontend URL here
+        # "https://your-frontend-app.com",
+        # Allow all for development (comment out in production)
+        "*",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -81,8 +100,15 @@ app.add_middleware(
 
 # Include API routes
 app.include_router(router, prefix="/api/v1")
-app.include_router(teams_router, prefix="/api/v1", tags=["teams"])
+# Legacy bot routes (can be deprecated once tabs are fully migrated)
+app.include_router(teams_router, prefix="/api/v1", tags=["teams-bot"])
+# New Teams Tabs + Web routes (replacement for bot framework)
+app.include_router(tabs_router, prefix="/api/v1", tags=["teams-tabs", "web"])
+# OAuth2 authentication routes for web application
+app.include_router(auth_router, prefix="/api/v1", tags=["auth"])
 app.include_router(group_mapping_router, prefix="/api/v1", tags=["group-mappings"])
+# Document upload and processing routes
+app.include_router(document_router, prefix="/api/v1", tags=["documents"])
 
 
 @app.get("/")
@@ -101,11 +127,34 @@ async def health():
     """Health check."""
     return {
         "status": "healthy",
-        "version": "1.0.1",
+        "version": "2.1.0",
+        "mode": "multi (bot + tabs + web)",
+        "authentication": {
+            "teams_bot": True,
+            "teams_sso": True,
+            "web_oauth2": True
+        },
         "file_support": {
             "pdf": True,
             "docx": True,
-            "method": "gemini_native"
+            "images": True,
+            "excel": True,
+            "method": "gemini_native",
+            "multi_document": True,
+            "presigned_upload": True
+        },
+        "endpoints": {
+            "bot": "/api/v1/teams/message",
+            "tabs": "/api/v1/tabs/invoke",
+            "tabs_health": "/api/v1/tabs/health",
+            "auth_login": "/api/v1/auth/login-url",
+            "auth_callback": "/api/v1/auth/callback",
+            "auth_me": "/api/v1/auth/me",
+            "auth_status": "/api/v1/auth/status",
+            "documents_presigned": "/api/v1/documents/presigned-url",
+            "documents_confirm": "/api/v1/documents/confirm-upload",
+            "documents_process": "/api/v1/documents/process",
+            "documents_supported_types": "/api/v1/documents/supported-types"
         }
     }
 
