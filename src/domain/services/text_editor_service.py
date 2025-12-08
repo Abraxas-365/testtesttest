@@ -13,6 +13,7 @@ from src.domain.models import (
     DocumentContext,
     AttachmentInfo,
     DiffSuggestion,
+    DiffType,
     StreamEvent,
 )
 from src.domain.services.agent_service import AgentService
@@ -275,9 +276,16 @@ class TextEditorService:
             if event.event_type == "content":
                 full_content += event.data.get("content", "")
             elif event.event_type == "diff":
+                # Convert string type to DiffType enum
+                diff_type_str = event.data["type"]
+                try:
+                    diff_type = DiffType(diff_type_str) if isinstance(diff_type_str, str) else diff_type_str
+                except ValueError:
+                    diff_type = DiffType.MODIFICATION
+
                 all_diffs.append(DiffSuggestion(
                     id=event.data["id"],
-                    type=event.data["type"],
+                    type=diff_type,
                     original_text=event.data["originalText"],
                     new_text=event.data["newText"],
                     start_index=event.data["startIndex"],

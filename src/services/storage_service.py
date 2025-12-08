@@ -223,9 +223,12 @@ class StorageService:
 
         return download_url
 
-    async def get_document_bytes(self, blob_path: str) -> bytes:
+    def get_document_bytes(self, blob_path: str) -> bytes:
         """
         Download document bytes from GCS.
+
+        This is a synchronous method. Use with asyncio.to_thread()
+        for async contexts.
 
         Args:
             blob_path: Path to the blob in GCS

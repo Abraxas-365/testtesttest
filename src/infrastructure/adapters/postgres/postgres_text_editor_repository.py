@@ -1,7 +1,8 @@
 """PostgreSQL adapter implementation of TextEditorRepository port."""
 
 import logging
-from typing import Optional, List
+import uuid as uuid_module
+from typing import Optional, List, Union
 from datetime import datetime
 import asyncpg
 from asyncpg import Pool
@@ -10,6 +11,18 @@ from src.domain.models import EditorDocument
 from src.domain.ports import TextEditorRepository
 
 logger = logging.getLogger(__name__)
+
+
+def _to_uuid(value: Union[str, uuid_module.UUID, None]) -> Optional[uuid_module.UUID]:
+    """Convert a value to UUID if it's a valid UUID string."""
+    if value is None:
+        return None
+    if isinstance(value, uuid_module.UUID):
+        return value
+    try:
+        return uuid_module.UUID(str(value))
+    except (ValueError, AttributeError):
+        return None
 
 
 class PostgresTextEditorRepository(TextEditorRepository):
@@ -74,6 +87,12 @@ class PostgresTextEditorRepository(TextEditorRepository):
         self, document_id: str, user_id: str
     ) -> Optional[EditorDocument]:
         """Get document by ID for a specific user."""
+        # Convert document_id to UUID
+        doc_uuid = _to_uuid(document_id)
+        if doc_uuid is None:
+            logger.warning(f"Invalid document_id format: {document_id}")
+            return None
+
         query = """
             SELECT
                 document_id,
@@ -87,7 +106,7 @@ class PostgresTextEditorRepository(TextEditorRepository):
             WHERE document_id = $1 AND user_id = $2
         """
         async with self.pool.acquire() as conn:
-            row = await conn.fetchrow(query, document_id, user_id)
+            row = await conn.fetchrow(query, doc_uuid, user_id)
             if row:
                 return self._row_to_document(row)
             return None
@@ -129,20 +148,29 @@ class PostgresTextEditorRepository(TextEditorRepository):
 
     async def _document_exists(self, document_id: str) -> bool:
         """Check if a document exists."""
+        doc_uuid = _to_uuid(document_id)
+        if doc_uuid is None:
+            return False
+
         query = "SELECT 1 FROM editor_documents WHERE document_id = $1"
         async with self.pool.acquire() as conn:
-            result = await conn.fetchval(query, document_id)
+            result = await conn.fetchval(query, doc_uuid)
             return result is not None
 
     async def _create_document(self, document: EditorDocument) -> EditorDocument:
         """Create a new document."""
         import json
-        import uuid
 
-        # Generate document_id if not provided or empty
+        # Generate document_id if not provided or empty, or convert to UUID
         doc_id = document.document_id
         if not doc_id or doc_id == "":
-            doc_id = str(uuid.uuid4())
+            doc_uuid = uuid_module.uuid4()
+        else:
+            doc_uuid = _to_uuid(doc_id)
+            if doc_uuid is None:
+                # Generate a new UUID if the provided one is invalid
+                doc_uuid = uuid_module.uuid4()
+                logger.warning(f"Invalid document_id provided: {doc_id}, generated new UUID: {doc_uuid}")
 
         query = """
             INSERT INTO editor_documents (
@@ -156,7 +184,7 @@ class PostgresTextEditorRepository(TextEditorRepository):
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow(
                 query,
-                doc_id,
+                doc_uuid,
                 document.user_id,
                 document.title,
                 document.content,
@@ -168,6 +196,10 @@ class PostgresTextEditorRepository(TextEditorRepository):
     async def _update_document(self, document: EditorDocument) -> EditorDocument:
         """Update an existing document."""
         import json
+
+        doc_uuid = _to_uuid(document.document_id)
+        if doc_uuid is None:
+            raise ValueError(f"Invalid document_id format: {document.document_id}")
 
         query = """
             UPDATE editor_documents
@@ -183,7 +215,7 @@ class PostgresTextEditorRepository(TextEditorRepository):
                 document.title,
                 document.content,
                 metadata_json,
-                document.document_id,
+                doc_uuid,
                 document.user_id,
             )
             if row:
@@ -196,13 +228,18 @@ class PostgresTextEditorRepository(TextEditorRepository):
 
     async def delete_document(self, document_id: str, user_id: str) -> bool:
         """Delete a document."""
+        doc_uuid = _to_uuid(document_id)
+        if doc_uuid is None:
+            logger.warning(f"Invalid document_id format for deletion: {document_id}")
+            return False
+
         query = """
             DELETE FROM editor_documents
             WHERE document_id = $1 AND user_id = $2
             RETURNING document_id
         """
         async with self.pool.acquire() as conn:
-            result = await conn.fetchval(query, document_id, user_id)
+            result = await conn.fetchval(query, doc_uuid, user_id)
             if result:
                 logger.info(f"Deleted document {document_id}")
                 return True
