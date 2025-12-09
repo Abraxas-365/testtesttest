@@ -10,14 +10,20 @@ from google.adk.sessions import DatabaseSessionService
 
 from src.domain.ports import AgentRepository, CorpusRepository, TextEditorRepository
 from src.domain.ports.group_mapping_repository import GroupMappingRepository
+from src.domain.ports.policy_repository import PolicyRepository
 from src.domain.services import AgentService
+from src.domain.services.policy_service import PolicyService
+from src.domain.services.policy_generation_service import PolicyGenerationService
+from src.domain.services.questionnaire_service import QuestionnaireService
 from src.infrastructure.adapters.postgres import (
     PostgresAgentRepository,
     PostgresCorpusRepository,
     PostgresGroupMappingRepository,
     PostgresTextEditorRepository,
 )
+from src.infrastructure.adapters.postgres.postgres_policy_repository import PostgresPolicyRepository
 from src.infrastructure.tools import ToolRegistry
+from src.services.storage_service import StorageService
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +45,12 @@ class Container:
         self._tool_registry: Optional[ToolRegistry] = None
         self._agent_service: Optional[AgentService] = None
         self._session_service: Optional[DatabaseSessionService] = None
+        # Policy system services
+        self._policy_repository = None
+        self._storage_service = None
+        self._policy_service = None
+        self._policy_generation_service = None
+        self._questionnaire_service = None
 
     async def init_repository(self) -> AgentRepository:
         """
@@ -234,6 +246,95 @@ class Container:
             logger.info("✅ AgentService initialized")
 
         return self._agent_service
+
+    # ============================================
+    # POLICY SYSTEM SERVICES
+    # ============================================
+
+    async def init_policy_repository(self) -> PolicyRepository:
+        """
+        Initialize and return the policy repository.
+
+        Returns:
+            PolicyRepository instance
+        """
+        if self._policy_repository is None:
+            db_host = os.getenv("DB_HOST", "localhost")
+            db_port = int(os.getenv("DB_PORT", "5432"))
+            db_name = os.getenv("DB_NAME", "agents_db")
+            db_user = os.getenv("DB_USER", "postgres")
+            db_password = os.getenv("DB_PASSWORD", "postgres")
+
+            pool = await asyncpg.create_pool(
+                host=db_host,
+                port=db_port,
+                database=db_name,
+                user=db_user,
+                password=db_password,
+                min_size=5,
+                max_size=10,
+            )
+            self._policy_repository = PostgresPolicyRepository(pool)
+            logger.info("✅ PostgresPolicyRepository initialized")
+
+        return self._policy_repository
+
+    def get_storage_service(self) -> StorageService:
+        """
+        Get or create storage service singleton.
+
+        Returns:
+            StorageService instance
+        """
+        if self._storage_service is None:
+            self._storage_service = StorageService()
+            logger.info("✅ StorageService initialized")
+
+        return self._storage_service
+
+    async def get_policy_service(self) -> PolicyService:
+        """
+        Get policy service with dependencies.
+
+        Returns:
+            PolicyService instance
+        """
+        if self._policy_service is None:
+            repo = await self.init_policy_repository()
+            storage = self.get_storage_service()
+            self._policy_service = PolicyService(repo, storage)
+            logger.info("✅ PolicyService initialized")
+
+        return self._policy_service
+
+    async def get_policy_generation_service(self) -> PolicyGenerationService:
+        """
+        Get policy generation service.
+
+        Returns:
+            PolicyGenerationService instance
+        """
+        if self._policy_generation_service is None:
+            repo = await self.init_policy_repository()
+            storage = self.get_storage_service()
+            self._policy_generation_service = PolicyGenerationService(repo, storage)
+            logger.info("✅ PolicyGenerationService initialized")
+
+        return self._policy_generation_service
+
+    async def get_questionnaire_service(self) -> QuestionnaireService:
+        """
+        Get questionnaire service.
+
+        Returns:
+            QuestionnaireService instance
+        """
+        if self._questionnaire_service is None:
+            repo = await self.init_policy_repository()
+            self._questionnaire_service = QuestionnaireService(repo)
+            logger.info("✅ QuestionnaireService initialized")
+
+        return self._questionnaire_service
 
     async def close(self):
         """Close all resources."""

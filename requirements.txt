@@ -29,3 +29,8 @@ cryptography>=41.0.7
 
 # Optional: For production logging
 structlog==24.4.0
+
+# PDF and Image Generation (for policy artifacts)
+reportlab>=4.0.0
+Pillow>=10.0.0
+markdown>=3.5.0
