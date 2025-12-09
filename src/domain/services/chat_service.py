@@ -149,6 +149,31 @@ class ChatService:
 
             # 5. Create runner
             app_name = f"agent_{resolved_agent_id}"
+
+            # 5.1 Ensure session exists in ADK's session service
+            try:
+                session = await session_service.get_session(
+                    app_name=app_name,
+                    user_id=user_id,
+                    session_id=session_id
+                )
+                if not session:
+                    logger.info(f"🆕 Creating ADK session {session_id[:20]}...")
+                    session = await session_service.create_session(
+                        app_name=app_name,
+                        user_id=user_id,
+                        session_id=session_id
+                    )
+                    logger.info(f"✅ ADK session created: {session_id[:20]}")
+            except Exception as session_error:
+                logger.info(f"🆕 Session not found, creating new ADK session {session_id[:20]}...")
+                session = await session_service.create_session(
+                    app_name=app_name,
+                    user_id=user_id,
+                    session_id=session_id
+                )
+                logger.info(f"✅ ADK session created: {session_id[:20]}")
+
             runner = Runner(
                 agent=agent,
                 app_name=app_name,
