@@ -1,13 +1,42 @@
 """API routes for session management."""
 
+import os
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Optional
+import asyncpg
 
 from src.application.di import get_container
 
 
 router = APIRouter()
+
+# Module-level pool for session queries
+_db_pool: Optional[asyncpg.Pool] = None
+
+
+async def get_db_pool() -> asyncpg.Pool:
+    """Get or create the database pool for session queries."""
+    global _db_pool
+
+    if _db_pool is None:
+        db_host = os.getenv("DB_HOST", "localhost")
+        db_port = int(os.getenv("DB_PORT", "5432"))
+        db_name = os.getenv("DB_NAME", "agents_db")
+        db_user = os.getenv("DB_USER", "postgres")
+        db_password = os.getenv("DB_PASSWORD", "postgres")
+
+        _db_pool = await asyncpg.create_pool(
+            host=db_host,
+            port=db_port,
+            database=db_name,
+            user=db_user,
+            password=db_password,
+            min_size=2,
+            max_size=10,
+        )
+
+    return _db_pool
 
 
 class SessionInfo(BaseModel):
@@ -48,12 +77,7 @@ async def list_user_sessions(user_id: str = "default_user"):
         )
 
     try:
-        import asyncpg
-
-        if not isinstance(agent_service.persistent_session_service, object):
-            raise HTTPException(status_code=500, detail="Session service not available")
-
-        pool = agent_service.persistent_session_service.pool
+        pool = await get_db_pool()
 
         async with pool.acquire() as conn:
             rows = await conn.fetch(
@@ -104,7 +128,7 @@ async def get_session(session_id: str, user_id: str = "default_user"):
         )
 
     try:
-        pool = agent_service.persistent_session_service.pool
+        pool = await get_db_pool()
 
         async with pool.acquire() as conn:
             session_row = await conn.fetchrow(
@@ -180,7 +204,7 @@ async def delete_session(session_id: str, user_id: str = "default_user"):
         )
 
     try:
-        pool = agent_service.persistent_session_service.pool
+        pool = await get_db_pool()
 
         async with pool.acquire() as conn:
             result = await conn.execute(

@@ -6,7 +6,9 @@ import logging
 import uuid
 import json
 import asyncio
+import os
 
+import asyncpg
 from google.adk.runners import Runner
 from google.genai import types
 
@@ -24,9 +26,37 @@ logger = logging.getLogger(__name__)
 class ChatService:
     """Service for chat session management."""
 
-    def __init__(self, agent_service: AgentService):
+    def __init__(self, agent_service: AgentService, db_pool: Optional[asyncpg.Pool] = None):
         self.agent_service = agent_service
         self.session_service = agent_service.persistent_session_service
+        self._db_pool = db_pool
+        self._pool_initialized = False
+
+    async def _get_pool(self) -> asyncpg.Pool:
+        """Get or create the database pool for session queries."""
+        if self._db_pool is not None:
+            return self._db_pool
+
+        if not self._pool_initialized:
+            db_host = os.getenv("DB_HOST", "localhost")
+            db_port = int(os.getenv("DB_PORT", "5432"))
+            db_name = os.getenv("DB_NAME", "agents_db")
+            db_user = os.getenv("DB_USER", "postgres")
+            db_password = os.getenv("DB_PASSWORD", "postgres")
+
+            self._db_pool = await asyncpg.create_pool(
+                host=db_host,
+                port=db_port,
+                database=db_name,
+                user=db_user,
+                password=db_password,
+                min_size=2,
+                max_size=10,
+            )
+            self._pool_initialized = True
+            logger.info("✅ ChatService database pool initialized")
+
+        return self._db_pool
 
     async def send_message(
         self,
@@ -269,13 +299,13 @@ class ChatService:
         status: Optional[str] = None
     ) -> SessionListResponse:
         """List user's sessions with pagination."""
-        if not self.session_service or not hasattr(self.session_service, 'pool'):
+        if not self.session_service:
             raise HTTPException(
                 status_code=503,
                 detail="Session service not available"
             )
 
-        pool = self.session_service.pool
+        pool = await self._get_pool()
         offset = (page - 1) * page_size
 
         async with pool.acquire() as conn:
@@ -348,13 +378,13 @@ class ChatService:
         before_message_id: Optional[str] = None
     ) -> SessionDetailResponse:
         """Get session with message history."""
-        if not self.session_service or not hasattr(self.session_service, 'pool'):
+        if not self.session_service:
             raise HTTPException(
                 status_code=503,
                 detail="Session service not available"
             )
 
-        pool = self.session_service.pool
+        pool = await self._get_pool()
 
         async with pool.acquire() as conn:
             # Get session
@@ -444,13 +474,13 @@ class ChatService:
         user_id: str
     ) -> Dict[str, str]:
         """Delete (close) a session."""
-        if not self.session_service or not hasattr(self.session_service, 'pool'):
+        if not self.session_service:
             raise HTTPException(
                 status_code=503,
                 detail="Session service not available"
             )
 
-        pool = self.session_service.pool
+        pool = await self._get_pool()
 
         async with pool.acquire() as conn:
             # Check ownership first
@@ -529,13 +559,13 @@ class ChatService:
         agent_id: str
     ) -> None:
         """Validate user owns session and agent matches."""
-        if not self.session_service or not hasattr(self.session_service, 'pool'):
+        if not self.session_service:
             raise HTTPException(
                 status_code=503,
                 detail="Session service not available"
             )
 
-        pool = self.session_service.pool
+        pool = await self._get_pool()
 
         async with pool.acquire() as conn:
             row = await conn.fetchrow(
@@ -579,10 +609,10 @@ class ChatService:
         prompt: str
     ) -> None:
         """Update session with agent_id and title (from first message)."""
-        if not self.session_service or not hasattr(self.session_service, 'pool'):
+        if not self.session_service:
             return
 
-        pool = self.session_service.pool
+        pool = await self._get_pool()
 
         try:
             async with pool.acquire() as conn:
