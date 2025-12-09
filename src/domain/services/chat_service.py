@@ -1,16 +1,21 @@
 """Business logic for chat and session management."""
 
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, AsyncGenerator
 from datetime import datetime
 import logging
 import uuid
 import json
+import asyncio
+
+from google.adk.runners import Runner
+from google.genai import types
 
 from src.domain.services.agent_service import AgentService
 from src.domain.models.chat_models import (
     ChatResponse, MessageResponse, SessionListItem,
     SessionListResponse, SessionDetailResponse
 )
+from src.domain.models.text_editor_models import StreamEvent
 from fastapi import HTTPException
 
 logger = logging.getLogger(__name__)
@@ -93,6 +98,143 @@ class ChatService:
             agent_name=agent_config.name,
             agent_area=agent_config.metadata.get("area_type", "general") if agent_config.metadata else "general"
         )
+
+    async def stream_message(
+        self,
+        user_id: str,
+        prompt: str,
+        agent_id: Optional[str] = None,
+        agent_name: Optional[str] = None,
+        session_id: Optional[str] = None,
+        metadata: Optional[dict] = None,
+        attachments: Optional[List[Dict[str, Any]]] = None
+    ) -> AsyncGenerator[StreamEvent, None]:
+        """
+        Stream a chat message response using SSE.
+        Creates new session if session_id not provided.
+
+        Yields StreamEvent objects for SSE serialization.
+        """
+        # 1. Determine agent
+        resolved_agent_id = await self._resolve_agent(agent_id, agent_name)
+
+        # 2. If session_id provided, validate ownership and agent match
+        if session_id:
+            await self._validate_session_ownership(
+                session_id, user_id, resolved_agent_id
+            )
+        else:
+            # Generate session ID for new session
+            session_id = f"sess_{uuid.uuid4().hex[:12]}"
+            logger.info(f"🆕 Creating new streaming session: {session_id}")
+
+        try:
+            # 3. Get the agent
+            agent = await self.agent_service.get_agent(resolved_agent_id)
+            if not agent:
+                yield StreamEvent(
+                    event_type="error",
+                    data={"message": f"Agent {resolved_agent_id} not found"}
+                )
+                return
+
+            # 4. Get session service
+            session_service = self.session_service
+            if not session_service:
+                yield StreamEvent(
+                    event_type="error",
+                    data={"message": "Session service not initialized"}
+                )
+                return
+
+            # 5. Create runner
+            app_name = f"agent_{resolved_agent_id}"
+            runner = Runner(
+                agent=agent,
+                app_name=app_name,
+                session_service=session_service
+            )
+
+            # 6. Build message parts
+            parts = [types.Part(text=prompt)]
+
+            # Add attachment info to prompt if present
+            if attachments:
+                attachment_text = "\n\n[Archivos adjuntos: "
+                attachment_text += ", ".join(a.get("filename", "archivo") for a in attachments)
+                attachment_text += "]"
+                parts.append(types.Part(text=attachment_text))
+
+            content_message = types.Content(role="user", parts=parts)
+
+            # 7. Stream the response with lock
+            async with self.agent_service.lock_manager.get_lock(session_id):
+                logger.info(f"🔒 Streaming started for session {session_id[:20]}...")
+
+                # Emit session info first
+                yield StreamEvent(
+                    event_type="session",
+                    data={"session_id": session_id, "agent_id": resolved_agent_id}
+                )
+
+                try:
+                    async for event in runner.run_async(
+                        user_id=user_id,
+                        session_id=session_id,
+                        new_message=content_message
+                    ):
+                        # Extract text content from event
+                        chunk_text = self._extract_text_from_event(event)
+                        if chunk_text:
+                            yield StreamEvent(
+                                event_type="content",
+                                data={"content": chunk_text}
+                            )
+
+                except asyncio.CancelledError:
+                    logger.info(f"Stream cancelled for session {session_id}")
+                    yield StreamEvent(
+                        event_type="cancelled",
+                        data={"session_id": session_id}
+                    )
+                    return
+
+            # 8. Update session metadata
+            await self._update_session_metadata(
+                session_id=session_id,
+                user_id=user_id,
+                agent_id=resolved_agent_id,
+                prompt=prompt
+            )
+
+            # 9. Signal completion
+            logger.info(f"✅ Stream completed for session {session_id}")
+            yield StreamEvent(
+                event_type="done",
+                data={"session_id": session_id}
+            )
+
+        except Exception as e:
+            logger.error(f"❌ Stream error: {e}", exc_info=True)
+            yield StreamEvent(
+                event_type="error",
+                data={"message": str(e)}
+            )
+
+    def _extract_text_from_event(self, event: Any) -> str:
+        """Extract text content from an ADK event."""
+        text = ""
+
+        if hasattr(event, "content") and event.content:
+            if hasattr(event.content, "parts"):
+                for part in event.content.parts:
+                    if hasattr(part, "text") and part.text:
+                        text += part.text
+
+        if hasattr(event, "text") and event.text:
+            text += event.text
+
+        return text
 
     async def list_sessions(
         self,

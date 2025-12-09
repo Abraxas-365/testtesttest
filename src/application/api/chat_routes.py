@@ -1,8 +1,11 @@
 """RESTful Chat API for frontend integration."""
 
 import logging
+import json
 from fastapi import APIRouter, HTTPException, Depends, Request, Query
-from typing import Optional
+from fastapi.responses import StreamingResponse
+from typing import Optional, List
+from pydantic import BaseModel, Field
 
 from src.middleware.teams_auth import require_auth
 from src.application.di import get_container
@@ -21,6 +24,163 @@ async def get_chat_service() -> ChatService:
     container = get_container()
     agent_service = await container.get_agent_service()
     return ChatService(agent_service)
+
+
+# =============================================================================
+# Request Models for Streaming
+# =============================================================================
+
+
+class AttachmentInfoRequest(BaseModel):
+    """Attachment info in streaming requests."""
+    id: str
+    filename: str
+    content_type: str
+    blob_path: Optional[str] = None
+
+
+class StreamChatRequest(BaseModel):
+    """Request for streaming chat messages."""
+    prompt: str = Field(..., description="User's message")
+    agent_id: Optional[str] = Field(None, description="Specific agent ID")
+    agent_name: Optional[str] = Field(None, description="Agent name (alternative to agent_id)")
+    session_id: Optional[str] = Field(None, description="Session ID for continuing conversation")
+    attachments: List[AttachmentInfoRequest] = Field(default_factory=list, description="File attachments")
+    metadata: Optional[dict] = Field(None, description="Additional context")
+
+
+# =============================================================================
+# SSE Generator
+# =============================================================================
+
+
+async def _sse_generator(events):
+    """
+    Async generator that formats StreamEvents as SSE data.
+
+    SSE Format:
+    - data: {"content": "..."} for content chunks
+    - data: {"session": {...}} for session info
+    - data: [DONE] for completion
+    """
+    try:
+        async for event in events:
+            yield event.to_sse()
+    except Exception as e:
+        logger.error(f"SSE generator error: {e}")
+        yield f"data: {json.dumps({'error': str(e)})}\n\n"
+
+
+# =============================================================================
+# Streaming Endpoint
+# =============================================================================
+
+
+@router.post("/chat/stream")
+async def stream_chat_message(
+    request: StreamChatRequest,
+    user: dict = Depends(require_auth),
+    chat_service: ChatService = Depends(get_chat_service)
+):
+    """
+    Stream a chat message response using SSE.
+
+    **Authentication:** Required JWT token
+
+    **Response Format:** Server-Sent Events (SSE)
+    - Session info: `data: {"session_id": "...", "agent_id": "..."}`
+    - Content chunks: `data: {"content": "..."}`
+    - Completion: `data: [DONE]`
+    - Errors: `data: {"error": "..."}`
+
+    **Client Usage:**
+    ```javascript
+    const response = await fetch('/api/v1/chat/stream', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+            prompt: "Hola, necesito ayuda...",
+            agent_name: "mi_agente",  // opcional
+            session_id: "sess_abc123"  // opcional, para continuar sesion
+        })
+    });
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+
+    while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const chunk = decoder.decode(value);
+        // Parse SSE format: "data: {...}\n\n"
+        const lines = chunk.split('\n');
+        for (const line of lines) {
+            if (line.startsWith('data: ')) {
+                const data = line.slice(6);
+                if (data === '[DONE]') {
+                    // Stream complete
+                } else {
+                    const parsed = JSON.parse(data);
+                    if (parsed.content) {
+                        // Append content to message
+                    }
+                }
+            }
+        }
+    }
+    ```
+
+    **Cancellation:** Client can abort using AbortController.
+    """
+    try:
+        user_id = user["user_id"]
+
+        logger.info(f"🌊 Stream request from {user['email']}: {request.prompt[:50]}...")
+
+        # Convert attachments to dict format
+        attachments = [
+            {
+                "id": a.id,
+                "filename": a.filename,
+                "content_type": a.content_type,
+                "blob_path": a.blob_path
+            }
+            for a in request.attachments
+        ] if request.attachments else None
+
+        # Create the streaming response
+        event_stream = chat_service.stream_message(
+            user_id=user_id,
+            prompt=request.prompt,
+            agent_id=request.agent_id,
+            agent_name=request.agent_name,
+            session_id=request.session_id,
+            metadata=request.metadata,
+            attachments=attachments
+        )
+
+        return StreamingResponse(
+            _sse_generator(event_stream),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",  # Disable nginx buffering
+            }
+        )
+
+    except Exception as e:
+        logger.error(f"❌ Stream endpoint error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# =============================================================================
+# Non-Streaming Endpoints
+# =============================================================================
 
 
 @router.post("/chat", response_model=ChatResponse)

@@ -149,6 +149,8 @@ class StreamEvent:
             return f"data: {json.dumps(self.data)}\n\n"
         elif self.event_type == "diff":
             return f"data: {json.dumps({'diff': self.data})}\n\n"
+        elif self.event_type == "session":
+            return f"data: {json.dumps({'session': self.data})}\n\n"
         elif self.event_type == "done":
             return "data: [DONE]\n\n"
         elif self.event_type == "cancelled":
