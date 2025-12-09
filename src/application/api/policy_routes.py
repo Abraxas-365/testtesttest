@@ -2,7 +2,7 @@
 
 import logging
 from fastapi import APIRouter, HTTPException, Depends, Query
-from typing import Optional, List
+from typing import Any, Optional, List
 from uuid import UUID
 from pydantic import BaseModel, Field
 
@@ -46,7 +46,7 @@ class GenerateQuestionnaireRequest(BaseModel):
 
 
 class UpdateCorrectAnswerRequest(BaseModel):
-    correct_answer: any
+    correct_answer: Any
 
 
 # ============================================
