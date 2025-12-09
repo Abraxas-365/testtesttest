@@ -15,6 +15,7 @@ from src.domain.services import AgentService
 from src.domain.services.policy_service import PolicyService
 from src.domain.services.policy_generation_service import PolicyGenerationService
 from src.domain.services.questionnaire_service import QuestionnaireService
+from src.domain.services.streaming_chat_service import StreamingChatService
 from src.infrastructure.adapters.postgres import (
     PostgresAgentRepository,
     PostgresCorpusRepository,
@@ -51,6 +52,9 @@ class Container:
         self._policy_service = None
         self._policy_generation_service = None
         self._questionnaire_service = None
+        # Streaming chat service
+        self._streaming_chat_service: Optional[StreamingChatService] = None
+        self._shared_db_pool: Optional[asyncpg.Pool] = None
 
     async def init_repository(self) -> AgentRepository:
         """
@@ -336,6 +340,52 @@ class Container:
 
         return self._questionnaire_service
 
+    async def _get_shared_db_pool(self) -> asyncpg.Pool:
+        """
+        Get or create a shared database pool for services.
+
+        Returns:
+            AsyncPG pool instance
+        """
+        if self._shared_db_pool is None:
+            db_host = os.getenv("DB_HOST", "localhost")
+            db_port = int(os.getenv("DB_PORT", "5432"))
+            db_name = os.getenv("DB_NAME", "agents_db")
+            db_user = os.getenv("DB_USER", "postgres")
+            db_password = os.getenv("DB_PASSWORD", "postgres")
+
+            self._shared_db_pool = await asyncpg.create_pool(
+                host=db_host,
+                port=db_port,
+                database=db_name,
+                user=db_user,
+                password=db_password,
+                min_size=5,
+                max_size=20,
+            )
+            logger.info("✅ Shared database pool initialized")
+
+        return self._shared_db_pool
+
+    async def get_streaming_chat_service(self) -> StreamingChatService:
+        """
+        Get the streaming chat service for token-level streaming with attachments.
+
+        Returns:
+            StreamingChatService instance
+        """
+        if self._streaming_chat_service is None:
+            storage_service = self.get_storage_service()
+            db_pool = await self._get_shared_db_pool()
+
+            self._streaming_chat_service = StreamingChatService(
+                storage_service=storage_service,
+                db_pool=db_pool,
+            )
+            logger.info("✅ StreamingChatService initialized")
+
+        return self._streaming_chat_service
+
     async def close(self):
         """Close all resources."""
         logger.info("🧹 Closing container resources...")
@@ -358,6 +408,10 @@ class Container:
 
         if self._session_service:
             logger.info("✅ Session service cleanup (managed by ADK)")
+
+        if self._shared_db_pool:
+            await self._shared_db_pool.close()
+            logger.info("✅ Shared database pool closed")
 
 
 _container: Optional[Container] = None

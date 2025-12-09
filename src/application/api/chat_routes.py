@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from src.middleware.teams_auth import require_auth
 from src.application.di import get_container
 from src.domain.services.chat_service import ChatService
+from src.domain.services.streaming_chat_service import StreamingChatService
 from src.domain.models.chat_models import (
     ChatMessageRequest, SessionMessageRequest,
     ChatResponse, SessionListResponse, SessionDetailResponse
@@ -24,6 +25,12 @@ async def get_chat_service() -> ChatService:
     container = get_container()
     agent_service = await container.get_agent_service()
     return ChatService(agent_service)
+
+
+async def get_streaming_chat_service() -> StreamingChatService:
+    """Dependency to get streaming chat service."""
+    container = get_container()
+    return await container.get_streaming_chat_service()
 
 
 # =============================================================================
@@ -80,18 +87,22 @@ async def _sse_generator(events):
 async def stream_chat_message(
     request: StreamChatRequest,
     user: dict = Depends(require_auth),
-    chat_service: ChatService = Depends(get_chat_service)
+    chat_service: ChatService = Depends(get_chat_service),
+    streaming_service: StreamingChatService = Depends(get_streaming_chat_service)
 ):
     """
-    Stream a chat message response using SSE.
+    Stream a chat message response using SSE with true token-level streaming.
 
     **Authentication:** Required JWT token
 
     **Response Format:** Server-Sent Events (SSE)
     - Session info: `data: {"session_id": "...", "agent_id": "..."}`
-    - Content chunks: `data: {"content": "..."}`
+    - Content chunks: `data: {"content": "..."}` (token-by-token)
     - Completion: `data: [DONE]`
     - Errors: `data: {"error": "..."}`
+
+    **Attachments:** Supports PDFs, images, Word docs, Excel, PowerPoint.
+    Files are downloaded from GCS and sent to Gemini for multimodal analysis.
 
     **Client Usage:**
     ```javascript
@@ -104,20 +115,28 @@ async def stream_chat_message(
         body: JSON.stringify({
             prompt: "Hola, necesito ayuda...",
             agent_name: "mi_agente",  // opcional
-            session_id: "sess_abc123"  // opcional, para continuar sesion
+            session_id: "sess_abc123",  // opcional, para continuar sesion
+            attachments: [{  // opcional
+                id: "doc-123",
+                filename: "report.pdf",
+                content_type: "application/pdf",
+                blob_path: "uploads/user/doc-123/report.pdf"
+            }]
         })
     });
 
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
+    let buffer = "";
 
     while (true) {
         const { done, value } = await reader.read();
         if (done) break;
 
-        const chunk = decoder.decode(value);
-        // Parse SSE format: "data: {...}\n\n"
-        const lines = chunk.split('\n');
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\\n');
+        buffer = lines.pop() || "";  // Keep incomplete line
+
         for (const line of lines) {
             if (line.startsWith('data: ')) {
                 const data = line.slice(6);
@@ -126,7 +145,7 @@ async def stream_chat_message(
                 } else {
                     const parsed = JSON.parse(data);
                     if (parsed.content) {
-                        // Append content to message
+                        // Append content token to message
                     }
                 }
             }
@@ -152,15 +171,31 @@ async def stream_chat_message(
             for a in request.attachments
         ] if request.attachments else None
 
-        # Create the streaming response
-        event_stream = chat_service.stream_message(
+        # Resolve agent ID and get agent instruction
+        agent_id = None
+        agent_instruction = None
+
+        if request.agent_id or request.agent_name:
+            container = get_container()
+            agent_service = await container.get_agent_service()
+
+            if request.agent_id:
+                agent_config = await agent_service.repository.get_agent_by_id(request.agent_id)
+            else:
+                agent_config = await agent_service.repository.get_agent_by_name(request.agent_name)
+
+            if agent_config:
+                agent_id = agent_config.agent_id
+                agent_instruction = agent_config.instruction
+
+        # Use the new streaming service with true token-level streaming
+        event_stream = streaming_service.stream_message(
             user_id=user_id,
             prompt=request.prompt,
-            agent_id=request.agent_id,
-            agent_name=request.agent_name,
             session_id=request.session_id,
-            metadata=request.metadata,
-            attachments=attachments
+            agent_id=agent_id,
+            agent_instruction=agent_instruction,
+            attachments=attachments,
         )
 
         return StreamingResponse(
