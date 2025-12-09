@@ -24,8 +24,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.application.api import router
-from src.application.api.teams_routes import router as teams_router
-from src.application.api.tabs_routes import router as tabs_router
+from src.application.api.chat_routes import router as chat_router
 from src.application.api.auth_routes import router as auth_router
 from src.application.api.group_mapping_routes import router as group_mapping_router
 from src.application.api.document_routes import router as document_router
@@ -69,8 +68,8 @@ async def lifespan(app: FastAPI):
 # Create FastAPI application
 app = FastAPI(
     title="GrupoDC Agent Service",
-    description="Google ADK Agent Service with PDF/DOCX support",
-    version="1.0.1",
+    description="Google ADK Agent Service with Chat API, PDF/DOCX support",
+    version="3.0.0",
     lifespan=lifespan,
 )
 
@@ -101,10 +100,15 @@ app.add_middleware(
 
 # Include API routes
 app.include_router(router, prefix="/api/v1")
-# Legacy bot routes (can be deprecated once tabs are fully migrated)
-app.include_router(teams_router, prefix="/api/v1", tags=["teams-bot"])
-# New Teams Tabs + Web routes (replacement for bot framework)
-app.include_router(tabs_router, prefix="/api/v1", tags=["teams-tabs", "web"])
+
+# ============================================
+# Chat API (RESTful chat session management)
+# ============================================
+app.include_router(chat_router, prefix="/api/v1", tags=["chat"])
+
+# ============================================
+# Other API routes
+# ============================================
 # OAuth2 authentication routes for web application
 app.include_router(auth_router, prefix="/api/v1", tags=["auth"])
 app.include_router(group_mapping_router, prefix="/api/v1", tags=["group-mappings"])
@@ -119,8 +123,8 @@ async def root():
     """Root endpoint."""
     return {
         "message": "GrupoDC Agent Service",
-        "version": "1.0.1",
-        "features": ["PDF support", "DOCX support", "Gemini 2.5 Flash"],
+        "version": "3.0.0",
+        "features": ["Chat API", "PDF support", "DOCX support", "Gemini 2.5 Flash"],
         "docs": "/docs",
     }
 
@@ -130,12 +134,11 @@ async def health():
     """Health check."""
     return {
         "status": "healthy",
-        "version": "2.1.0",
-        "mode": "multi (bot + tabs + web)",
+        "version": "3.0.0",
+        "mode": "chat_api",
         "authentication": {
-            "teams_bot": True,
-            "teams_sso": True,
-            "web_oauth2": True
+            "jwt_required": True,
+            "methods": ["teams_sso", "web_oauth2"]
         },
         "file_support": {
             "pdf": True,
@@ -147,17 +150,26 @@ async def health():
             "presigned_upload": True
         },
         "endpoints": {
-            "bot": "/api/v1/teams/message",
-            "tabs": "/api/v1/tabs/invoke",
-            "tabs_health": "/api/v1/tabs/health",
+            # Chat API
+            "chat": "/api/v1/chat",
+            "chat_session": "/api/v1/chat/sessions/{session_id}",
+            "list_sessions": "/api/v1/chat/sessions",
+            "get_session": "/api/v1/chat/sessions/{session_id}",
+            "delete_session": "/api/v1/chat/sessions/{session_id}",
+
+            # Authentication
             "auth_login": "/api/v1/auth/login-url",
             "auth_callback": "/api/v1/auth/callback",
             "auth_me": "/api/v1/auth/me",
             "auth_status": "/api/v1/auth/status",
+
+            # Documents
             "documents_presigned": "/api/v1/documents/presigned-url",
             "documents_confirm": "/api/v1/documents/confirm-upload",
             "documents_process": "/api/v1/documents/process",
             "documents_supported_types": "/api/v1/documents/supported-types",
+
+            # AI Editor
             "ai_editor_stream": "/api/v1/ai-editor/stream",
             "ai_editor_upload": "/api/v1/ai-editor/upload",
             "ai_editor_chat": "/api/v1/ai-editor/chat",
