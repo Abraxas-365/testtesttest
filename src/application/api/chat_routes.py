@@ -2,6 +2,7 @@
 
 import logging
 import json
+import asyncio
 from fastapi import APIRouter, HTTPException, Depends, Request, Query
 from fastapi.responses import StreamingResponse
 from typing import Optional, List
@@ -69,13 +70,18 @@ async def _sse_generator(events):
     - data: {"content": "..."} for content chunks
     - data: {"session": {...}} for session info
     - data: [DONE] for completion
+    - data: {"error": {"message": "..."}} for errors
     """
     try:
         async for event in events:
             yield event.to_sse()
+    except asyncio.CancelledError:
+        # Client disconnected - this is normal, don't log as error
+        logger.info("SSE stream cancelled by client")
+        yield "data: [CANCELLED]\n\n"
     except Exception as e:
-        logger.error(f"SSE generator error: {e}")
-        yield f"data: {json.dumps({'error': str(e)})}\n\n"
+        logger.error(f"SSE generator error: {e}", exc_info=True)
+        yield f"data: {json.dumps({'error': {'message': str(e)}})}\n\n"
 
 
 # =============================================================================

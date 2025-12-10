@@ -140,17 +140,15 @@ class StreamingChatService:
 
             logger.info(f"Starting streaming for session {session_id[:20]}...")
 
-            # Await the stream coroutine first to get the async iterator
-            stream = await self.gemini_client.aio.models.generate_content_stream(
+            # Call the streaming method - it returns an async generator directly
+            async for chunk in self.gemini_client.aio.models.generate_content_stream(
                 model=self.model_name,
                 contents=contents,
                 config=types.GenerateContentConfig(
                     temperature=temperature,
                     max_output_tokens=max_output_tokens,
                 ),
-            )
-
-            async for chunk in stream:
+            ):
                 # Extract text from chunk
                 if chunk.text:
                     full_response += chunk.text
@@ -427,12 +425,17 @@ class StreamingChatService:
                         for a in attachments
                     ]
 
+                # Determine app_name for events table
+                app_name = f"agent_{agent_id}" if agent_id else "chat"
+
                 await conn.execute(
                     """
-                    INSERT INTO events (id, session_id, author, content, timestamp)
-                    VALUES ($1, $2, 'user', $3, NOW())
+                    INSERT INTO events (id, app_name, user_id, session_id, author, content, timestamp)
+                    VALUES ($1, $2, $3, $4, 'user', $5, NOW())
                     """,
                     user_event_id,
+                    app_name,
+                    user_id,
                     session_id,
                     user_content
                 )
@@ -441,10 +444,12 @@ class StreamingChatService:
                 assistant_event_id = f"evt_{uuid.uuid4().hex[:12]}"
                 await conn.execute(
                     """
-                    INSERT INTO events (id, session_id, author, content, timestamp)
-                    VALUES ($1, $2, 'model', $3, NOW())
+                    INSERT INTO events (id, app_name, user_id, session_id, author, content, timestamp)
+                    VALUES ($1, $2, $3, $4, 'model', $5, NOW())
                     """,
                     assistant_event_id,
+                    app_name,
+                    user_id,
                     session_id,
                     {"parts": [{"text": assistant_response}]}
                 )
