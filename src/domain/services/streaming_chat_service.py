@@ -140,14 +140,17 @@ class StreamingChatService:
 
             logger.info(f"Starting streaming for session {session_id[:20]}...")
 
-            async for chunk in self.gemini_client.aio.models.generate_content_stream(
+            # Await the stream coroutine first to get the async iterator
+            stream = await self.gemini_client.aio.models.generate_content_stream(
                 model=self.model_name,
                 contents=contents,
                 config=types.GenerateContentConfig(
                     temperature=temperature,
                     max_output_tokens=max_output_tokens,
                 ),
-            ):
+            )
+
+            async for chunk in stream:
                 # Extract text from chunk
                 if chunk.text:
                     full_response += chunk.text
