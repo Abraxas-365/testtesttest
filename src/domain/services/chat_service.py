@@ -30,31 +30,21 @@ class ChatService:
         self.agent_service = agent_service
         self.session_service = agent_service.persistent_session_service
         self._db_pool = db_pool
-        self._pool_initialized = False
 
     async def _get_pool(self) -> asyncpg.Pool:
-        """Get or create the database pool for session queries."""
+        """
+        Get the database pool for session queries.
+
+        Uses the shared pool from the DI container to avoid connection exhaustion.
+        """
         if self._db_pool is not None:
             return self._db_pool
 
-        if not self._pool_initialized:
-            db_host = os.getenv("DB_HOST", "localhost")
-            db_port = int(os.getenv("DB_PORT", "5432"))
-            db_name = os.getenv("DB_NAME", "agents_db")
-            db_user = os.getenv("DB_USER", "postgres")
-            db_password = os.getenv("DB_PASSWORD", "postgres")
-
-            self._db_pool = await asyncpg.create_pool(
-                host=db_host,
-                port=db_port,
-                database=db_name,
-                user=db_user,
-                password=db_password,
-                min_size=2,
-                max_size=10,
-            )
-            self._pool_initialized = True
-            logger.info("✅ ChatService database pool initialized")
+        # Get shared pool from container
+        from src.application.di import get_container
+        container = get_container()
+        self._db_pool = await container.get_db_pool()
+        logger.info("✅ ChatService using shared database pool")
 
         return self._db_pool
 
@@ -277,19 +267,60 @@ class ChatService:
             )
 
     def _extract_text_from_event(self, event: Any) -> str:
-        """Extract text content from an ADK event."""
+        """Extract text content from an ADK event, filtering out tool call artifacts."""
         text = ""
 
+        # Skip events that are pure function calls/responses
         if hasattr(event, "content") and event.content:
             if hasattr(event.content, "parts"):
                 for part in event.content.parts:
+                    # Skip function_call and function_response parts
+                    if hasattr(part, "function_call") and part.function_call:
+                        continue
+                    if hasattr(part, "function_response") and part.function_response:
+                        continue
                     if hasattr(part, "text") and part.text:
                         text += part.text
 
         if hasattr(event, "text") and event.text:
             text += event.text
 
+        # Clean up any tool call artifacts that might have leaked through
+        text = self._clean_tool_call_text(text)
+
         return text
+
+    def _clean_tool_call_text(self, text: str) -> str:
+        """
+        Remove tool call syntax and artifacts from text.
+
+        This handles cases where the LLM outputs tool calls as text
+        instead of proper function calls.
+        """
+        import re
+
+        if not text:
+            return text
+
+        # Remove lines that look like tool calls (e.g., rag_search "query")
+        # Pattern: word_with_underscores followed by quoted string
+        text = re.sub(r'^[\s]*[a-z_]+\s+"[^"]*"[\s]*$', '', text, flags=re.MULTILINE)
+
+        # Remove code blocks that contain tool calls
+        text = re.sub(
+            r'```(?:TOOL_CODE|tool|function)?\s*\n[a-z_]+\s+"[^"]*"\s*\n```',
+            '',
+            text,
+            flags=re.IGNORECASE
+        )
+
+        # Remove standalone tool call patterns
+        text = re.sub(r'\b(rag_search|search_\w+)\s+"[^"]*"', '', text)
+
+        # Clean up multiple newlines left behind
+        text = re.sub(r'\n{3,}', '\n\n', text)
+
+        return text.strip()
 
     async def list_sessions(
         self,

@@ -85,29 +85,15 @@ class Container:
         """
         Initialize and return the corpus repository.
 
-        Uses the same database connection as the agent repository.
+        Uses the shared database pool.
 
         Returns:
             CorpusRepository instance
         """
         if self._corpus_repository is None:
-            db_host = os.getenv("DB_HOST", "localhost")
-            db_port = int(os.getenv("DB_PORT", "5432"))
-            db_name = os.getenv("DB_NAME", "agents_db")
-            db_user = os.getenv("DB_USER", "postgres")
-            db_password = os.getenv("DB_PASSWORD", "postgres")
-
-            pool = await asyncpg.create_pool(
-                host=db_host,
-                port=db_port,
-                database=db_name,
-                user=db_user,
-                password=db_password,
-                min_size=5,
-                max_size=10,
-            )
+            pool = await self._get_shared_db_pool()
             self._corpus_repository = PostgresCorpusRepository(pool)
-            logger.info("✅ PostgresCorpusRepository initialized")
+            logger.info("✅ PostgresCorpusRepository initialized (shared pool)")
 
         return self._corpus_repository
 
@@ -115,29 +101,15 @@ class Container:
         """
         Initialize and return the group mapping repository.
 
-        Uses the same database connection as the agent repository.
+        Uses the shared database pool.
 
         Returns:
             GroupMappingRepository instance
         """
         if self._group_mapping_repository is None:
-            db_host = os.getenv("DB_HOST", "localhost")
-            db_port = int(os.getenv("DB_PORT", "5432"))
-            db_name = os.getenv("DB_NAME", "agents_db")
-            db_user = os.getenv("DB_USER", "postgres")
-            db_password = os.getenv("DB_PASSWORD", "postgres")
-
-            pool = await asyncpg.create_pool(
-                host=db_host,
-                port=db_port,
-                database=db_name,
-                user=db_user,
-                password=db_password,
-                min_size=5,
-                max_size=10,
-            )
+            pool = await self._get_shared_db_pool()
             self._group_mapping_repository = PostgresGroupMappingRepository(pool)
-            logger.info("✅ PostgresGroupMappingRepository initialized")
+            logger.info("✅ PostgresGroupMappingRepository initialized (shared pool)")
 
         return self._group_mapping_repository
 
@@ -259,27 +231,15 @@ class Container:
         """
         Initialize and return the policy repository.
 
+        Uses the shared database pool.
+
         Returns:
             PolicyRepository instance
         """
         if self._policy_repository is None:
-            db_host = os.getenv("DB_HOST", "localhost")
-            db_port = int(os.getenv("DB_PORT", "5432"))
-            db_name = os.getenv("DB_NAME", "agents_db")
-            db_user = os.getenv("DB_USER", "postgres")
-            db_password = os.getenv("DB_PASSWORD", "postgres")
-
-            pool = await asyncpg.create_pool(
-                host=db_host,
-                port=db_port,
-                database=db_name,
-                user=db_user,
-                password=db_password,
-                min_size=5,
-                max_size=10,
-            )
+            pool = await self._get_shared_db_pool()
             self._policy_repository = PostgresPolicyRepository(pool)
-            logger.info("✅ PostgresPolicyRepository initialized")
+            logger.info("✅ PostgresPolicyRepository initialized (shared pool)")
 
         return self._policy_repository
 
@@ -342,7 +302,10 @@ class Container:
 
     async def _get_shared_db_pool(self) -> asyncpg.Pool:
         """
-        Get or create a shared database pool for services.
+        Get or create a shared database pool for ALL services.
+
+        This is the single source of database connections for the entire application.
+        All repositories and services should use this pool.
 
         Returns:
             AsyncPG pool instance
@@ -354,16 +317,20 @@ class Container:
             db_user = os.getenv("DB_USER", "postgres")
             db_password = os.getenv("DB_PASSWORD", "postgres")
 
+            # Use conservative pool settings to avoid connection exhaustion
+            # Cloud SQL free tier: max_connections = 25
+            # Cloud SQL basic: max_connections = 100
             self._shared_db_pool = await asyncpg.create_pool(
                 host=db_host,
                 port=db_port,
                 database=db_name,
                 user=db_user,
                 password=db_password,
-                min_size=5,
-                max_size=20,
+                min_size=2,  # Reduced from 5
+                max_size=10,  # Reduced from 20 - leaves headroom for ADK sessions
+                command_timeout=60,
             )
-            logger.info("✅ Shared database pool initialized")
+            logger.info(f"✅ Shared database pool initialized (min=2, max=10)")
 
         return self._shared_db_pool
 
@@ -386,21 +353,24 @@ class Container:
 
         return self._streaming_chat_service
 
+    async def get_db_pool(self) -> asyncpg.Pool:
+        """
+        Public method to get the shared database pool.
+
+        Use this when services need direct access to the pool.
+
+        Returns:
+            AsyncPG pool instance
+        """
+        return await self._get_shared_db_pool()
+
     async def close(self):
         """Close all resources."""
         logger.info("🧹 Closing container resources...")
-        
+
         if self._repository and isinstance(self._repository, PostgresAgentRepository):
             await self._repository.close()
             logger.info("✅ Agent repository closed")
-            
-        if self._corpus_repository and isinstance(self._corpus_repository, PostgresCorpusRepository):
-            await self._corpus_repository.pool.close()
-            logger.info("✅ Corpus repository closed")
-            
-        if self._group_mapping_repository and isinstance(self._group_mapping_repository, PostgresGroupMappingRepository):
-            await self._group_mapping_repository.pool.close()
-            logger.info("✅ Group mapping repository closed")
 
         if self._text_editor_repository and isinstance(self._text_editor_repository, PostgresTextEditorRepository):
             await self._text_editor_repository.close()
@@ -409,6 +379,7 @@ class Container:
         if self._session_service:
             logger.info("✅ Session service cleanup (managed by ADK)")
 
+        # Close the shared pool LAST since all repositories use it
         if self._shared_db_pool:
             await self._shared_db_pool.close()
             logger.info("✅ Shared database pool closed")
