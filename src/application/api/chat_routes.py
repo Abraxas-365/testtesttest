@@ -11,7 +11,6 @@ from pydantic import BaseModel, Field
 from src.middleware.teams_auth import require_auth
 from src.application.di import get_container
 from src.domain.services.chat_service import ChatService
-from src.domain.services.streaming_chat_service import StreamingChatService
 from src.domain.models.chat_models import (
     ChatMessageRequest, SessionMessageRequest,
     ChatResponse, SessionListResponse, SessionDetailResponse
@@ -26,12 +25,6 @@ async def get_chat_service() -> ChatService:
     container = get_container()
     agent_service = await container.get_agent_service()
     return ChatService(agent_service)
-
-
-async def get_streaming_chat_service() -> StreamingChatService:
-    """Dependency to get streaming chat service."""
-    container = get_container()
-    return await container.get_streaming_chat_service()
 
 
 # =============================================================================
@@ -94,7 +87,6 @@ async def stream_chat_message(
     request: StreamChatRequest,
     user: dict = Depends(require_auth),
     chat_service: ChatService = Depends(get_chat_service),
-    streaming_service: StreamingChatService = Depends(get_streaming_chat_service)
 ):
     """
     Stream a chat message response using SSE with true token-level streaming.
@@ -177,30 +169,13 @@ async def stream_chat_message(
             for a in request.attachments
         ] if request.attachments else None
 
-        # Resolve agent ID and get agent instruction
-        agent_id = None
-        agent_instruction = None
-
-        if request.agent_id or request.agent_name:
-            container = get_container()
-            agent_service = await container.get_agent_service()
-
-            if request.agent_id:
-                agent_config = await agent_service.repository.get_agent_by_id(request.agent_id)
-            else:
-                agent_config = await agent_service.repository.get_agent_by_name(request.agent_name)
-
-            if agent_config:
-                agent_id = agent_config.agent_id
-                agent_instruction = agent_config.instruction
-
-        # Use the new streaming service with true token-level streaming
-        event_stream = streaming_service.stream_message(
+        # Use ChatService.stream_message() which uses ADK Runner with tool execution
+        event_stream = chat_service.stream_message(
             user_id=user_id,
             prompt=request.prompt,
             session_id=request.session_id,
-            agent_id=agent_id,
-            agent_instruction=agent_instruction,
+            agent_id=request.agent_id,
+            agent_name=request.agent_name,
             attachments=attachments,
         )
 
