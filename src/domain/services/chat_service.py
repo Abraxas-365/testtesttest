@@ -18,9 +18,20 @@ from src.domain.models.chat_models import (
     SessionListResponse, SessionDetailResponse
 )
 from src.domain.models.text_editor_models import StreamEvent
+from src.services.storage_service import StorageService
 from fastapi import HTTPException
 
 logger = logging.getLogger(__name__)
+
+# Lazy-loaded storage service singleton
+_storage_service: Optional[StorageService] = None
+
+def _get_storage_service() -> StorageService:
+    """Get or create storage service singleton."""
+    global _storage_service
+    if _storage_service is None:
+        _storage_service = StorageService()
+    return _storage_service
 
 
 class ChatService:
@@ -201,14 +212,45 @@ class ChatService:
             )
 
             # 6. Build message parts
-            parts = [types.Part(text=prompt)]
+            parts = []
 
-            # Add attachment info to prompt if present
+            # 6.1 Add attachments as multimodal parts (fetch from GCS)
             if attachments:
-                attachment_text = "\n\n[Archivos adjuntos: "
-                attachment_text += ", ".join(a.get("filename", "archivo") for a in attachments)
-                attachment_text += "]"
-                parts.append(types.Part(text=attachment_text))
+                storage = _get_storage_service()
+                for attachment in attachments:
+                    blob_path = attachment.get("blob_path")
+                    content_type = attachment.get("content_type", "application/octet-stream")
+                    filename = attachment.get("filename", "file")
+
+                    if blob_path:
+                        try:
+                            logger.info(f"📎 Fetching attachment from GCS: {filename}")
+                            # Fetch document bytes from GCS (sync method, use thread)
+                            doc_bytes = await asyncio.to_thread(
+                                storage.get_document_bytes,
+                                blob_path
+                            )
+                            # Add as multimodal part for Gemini using inline_data
+                            parts.append(
+                                types.Part(
+                                    inline_data=types.Blob(
+                                        mime_type=content_type,
+                                        data=doc_bytes
+                                    )
+                                )
+                            )
+                            # Add filename label for context
+                            parts.append(types.Part(text=f"\n[Above: {filename}]\n\n"))
+                            logger.info(f"✅ Added attachment: {filename} ({len(doc_bytes)} bytes)")
+                        except Exception as e:
+                            logger.error(f"❌ Failed to fetch attachment {filename}: {e}")
+                            # Add error note to prompt instead
+                            parts.append(types.Part(text=f"\n[Error loading attachment: {filename}]"))
+                    else:
+                        logger.warning(f"⚠️ Attachment {filename} has no blob_path")
+
+            # 6.2 Add user prompt text
+            parts.append(types.Part(text=prompt))
 
             content_message = types.Content(role="user", parts=parts)
 
