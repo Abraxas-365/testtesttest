@@ -155,6 +155,12 @@ class SupportedTypesResponse(BaseModel):
     supported_types: dict = Field(..., description="Map of MIME types to descriptions")
 
 
+class SignedDownloadUrlResponse(BaseModel):
+    """Response with signed download URL."""
+    signed_url: str = Field(..., description="Time-limited signed URL for downloading")
+    expires_in_seconds: int = Field(..., description="URL expiration time in seconds")
+
+
 # =============================================================================
 # Endpoints
 # =============================================================================
@@ -168,6 +174,71 @@ async def get_supported_types():
     Returns a dictionary mapping MIME types to human-readable descriptions.
     """
     return SupportedTypesResponse(supported_types=SUPPORTED_MIME_TYPES)
+
+
+@router.get("/documents/signed-url", response_model=SignedDownloadUrlResponse)
+async def get_signed_download_url(
+    blob_path: str,
+    user: dict = Depends(require_auth),
+):
+    """
+    Generate a time-limited signed URL for downloading/viewing a document.
+
+    **Authentication:** Requires valid Teams SSO token or OAuth2 JWT.
+
+    **Security:**
+    - Users can only access their own documents
+    - URLs expire after 15 minutes
+    - Bucket remains private (no public access)
+
+    **Usage:**
+    Use this endpoint to get a temporary URL for viewing/downloading
+    documents that were previously uploaded. The returned URL can be
+    opened directly in the browser.
+    """
+    try:
+        user_id = user["user_id"]
+
+        logger.info(f"🔗 Generating signed download URL for user {user_id}: {blob_path}")
+
+        # Security: Verify the blob_path belongs to this user
+        if not blob_path.startswith(f"uploads/{user_id}/"):
+            logger.warning(f"⚠️ Access denied: User {user_id} attempted to access {blob_path}")
+            raise HTTPException(
+                status_code=403,
+                detail="Access denied. You can only access your own documents.",
+            )
+
+        storage = get_storage_service()
+
+        # Verify document exists
+        doc_info = storage.verify_upload(blob_path)
+        if not doc_info or not doc_info.get("exists"):
+            raise HTTPException(
+                status_code=404,
+                detail="Document not found",
+            )
+
+        # Generate signed URL (15 minutes expiry)
+        expiration_minutes = 15
+        signed_url = storage.generate_presigned_download_url(
+            blob_path=blob_path,
+            expiration_minutes=expiration_minutes,
+        )
+
+        return SignedDownloadUrlResponse(
+            signed_url=signed_url,
+            expires_in_seconds=expiration_minutes * 60,
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Error generating signed download URL: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to generate download URL: {str(e)}",
+        )
 
 
 @router.post("/documents/presigned-url", response_model=PresignedUrlResponse)
