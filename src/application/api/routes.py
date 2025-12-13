@@ -1,10 +1,12 @@
 """API routes for the agent service."""
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import Optional
 
 from src.application.di import get_container
+from src.middleware.rbac import require_permission
+from src.domain.models.rbac_models import UserRBAC
 
 
 router = APIRouter()
@@ -43,12 +45,17 @@ async def health_check():
 
 
 @router.post("/invoke", response_model=InvokeResponse)
-async def invoke_agent(request: InvokeRequest):
+async def invoke_agent(
+    request: InvokeRequest,
+    user: UserRBAC = Depends(require_permission("agents:invoke"))
+):
     """
     Invoke an agent with a prompt.
-    
+
     Sessions are ALWAYS persisted to database for conversation history.
     Either agent_id or agent_name must be provided.
+
+    **Authorization:** Requires agents:invoke permission
     """
     if not request.agent_id and not request.agent_name:
         raise HTTPException(
@@ -92,9 +99,14 @@ async def invoke_agent(request: InvokeRequest):
 
 
 @router.get("/agents", response_model=list[AgentInfo])
-async def list_agents(enabled_only: bool = True):
+async def list_agents(
+    enabled_only: bool = True,
+    user: UserRBAC = Depends(require_permission("agents:list"))
+):
     """
     List all available agents.
+
+    **Authorization:** Requires agents:list permission
 
     Args:
         enabled_only: If True, return only enabled agents
@@ -121,8 +133,15 @@ async def list_agents(enabled_only: bool = True):
 
 
 @router.get("/agents/{agent_id}")
-async def get_agent(agent_id: str):
-    """Get detailed information about an agent."""
+async def get_agent(
+    agent_id: str,
+    user: UserRBAC = Depends(require_permission("agents:view"))
+):
+    """
+    Get detailed information about an agent.
+
+    **Authorization:** Requires agents:view permission
+    """
     container = get_container()
     agent_service = await container.get_agent_service()
 
@@ -163,8 +182,15 @@ async def get_agent(agent_id: str):
 
 
 @router.post("/agents/{agent_id}/reload")
-async def reload_agent(agent_id: str):
-    """Reload an agent configuration from the database."""
+async def reload_agent(
+    agent_id: str,
+    user: UserRBAC = Depends(require_permission("agents:edit"))
+):
+    """
+    Reload an agent configuration from the database.
+
+    **Authorization:** Requires agents:edit permission
+    """
     container = get_container()
     agent_service = await container.get_agent_service()
 

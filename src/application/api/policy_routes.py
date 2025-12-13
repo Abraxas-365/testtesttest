@@ -6,7 +6,8 @@ from typing import Any, Optional, List
 from uuid import UUID
 from pydantic import BaseModel, Field
 
-from src.middleware.teams_auth import require_auth
+from src.middleware.rbac import require_permission
+from src.domain.models.rbac_models import UserRBAC
 from src.application.di import get_container
 from src.domain.services.policy_service import PolicyService
 from src.domain.services.policy_generation_service import PolicyGenerationService
@@ -71,14 +72,9 @@ async def get_questionnaire_service() -> QuestionnaireService:
     return await container.get_questionnaire_service()
 
 
-def get_user_groups(user: dict) -> List[str]:
-    """Extract user groups from JWT token."""
-    # Groups might be in different JWT claims depending on Azure AD config
-    groups = user.get("groups", [])
-    if not groups:
-        # Try alternative claim names
-        groups = user.get("roles", [])
-    return groups if isinstance(groups, list) else []
+def get_user_groups(user: UserRBAC) -> List[str]:
+    """Extract user groups from RBAC context."""
+    return user.entra_groups
 
 
 # ============================================
@@ -88,20 +84,21 @@ def get_user_groups(user: dict) -> List[str]:
 @router.post("/policies")
 async def create_policy(
     request: CreatePolicyRequest,
-    user: dict = Depends(require_auth),
+    user: UserRBAC = Depends(require_permission("policies:create")),
     policy_service: PolicyService = Depends(get_policy_service)
 ):
     """
     Create a new policy.
 
     **Authentication:** Required
+    **Authorization:** Requires policies:create permission
 
     **Request Body:**
     - title: Policy title (required)
     - description: Policy description (optional)
     - access_level: 'private', 'group', or 'organization' (default: private)
     """
-    user_id = user["user_id"]
+    user_id = user.user_id
 
     try:
         access_level = AccessLevel(request.access_level)
@@ -132,20 +129,21 @@ async def list_policies(
     status: Optional[str] = Query(None),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
-    user: dict = Depends(require_auth),
+    user: UserRBAC = Depends(require_permission("policies:list")),
     policy_service: PolicyService = Depends(get_policy_service)
 ):
     """
     List policies accessible by current user.
 
     **Authentication:** Required
+    **Authorization:** Requires policies:list permission
 
     **Query Parameters:**
     - status: Filter by status (optional)
     - page: Page number (default: 1)
     - page_size: Items per page (default: 20, max: 100)
     """
-    user_id = user["user_id"]
+    user_id = user.user_id
     user_groups = get_user_groups(user)
 
     status_filter = None
@@ -191,16 +189,16 @@ async def list_policies(
 @router.get("/policies/{policy_id}")
 async def get_policy(
     policy_id: UUID,
-    user: dict = Depends(require_auth),
+    user: UserRBAC = Depends(require_permission("policies:view")),
     policy_service: PolicyService = Depends(get_policy_service)
 ):
     """
     Get policy details by ID.
 
     **Authentication:** Required
-    **Authorization:** User must have access to the policy
+    **Authorization:** Requires policies:view permission and access to the policy
     """
-    user_id = user["user_id"]
+    user_id = user.user_id
     user_groups = get_user_groups(user)
 
     policy = await policy_service.get_policy_with_access_check(
@@ -232,16 +230,16 @@ async def get_policy(
 async def update_policy(
     policy_id: UUID,
     request: UpdatePolicyRequest,
-    user: dict = Depends(require_auth),
+    user: UserRBAC = Depends(require_permission("policies:edit")),
     policy_service: PolicyService = Depends(get_policy_service)
 ):
     """
     Update policy metadata or content.
 
     **Authentication:** Required
-    **Authorization:** User must have edit permission
+    **Authorization:** Requires policies:edit permission
     """
-    user_id = user["user_id"]
+    user_id = user.user_id
     user_groups = get_user_groups(user)
 
     if request.content:
@@ -285,16 +283,16 @@ async def update_policy(
 @router.post("/policies/{policy_id}/approve")
 async def approve_policy(
     policy_id: UUID,
-    user: dict = Depends(require_auth),
+    user: UserRBAC = Depends(require_permission("policies:edit")),
     policy_service: PolicyService = Depends(get_policy_service)
 ):
     """
     Approve policy for publication.
 
     **Authentication:** Required
-    **Authorization:** User must have approve permission or be owner
+    **Authorization:** Requires policies:edit permission
     """
-    user_id = user["user_id"]
+    user_id = user.user_id
     user_groups = get_user_groups(user)
 
     policy = await policy_service.approve_policy(
@@ -313,16 +311,16 @@ async def approve_policy(
 @router.post("/policies/{policy_id}/publish")
 async def publish_policy(
     policy_id: UUID,
-    user: dict = Depends(require_auth),
+    user: UserRBAC = Depends(require_permission("policies:publish")),
     generation_service: PolicyGenerationService = Depends(get_generation_service)
 ):
     """
     Generate PDF/JPEG artifacts and publish policy.
 
     **Authentication:** Required
-    **Authorization:** Policy owner only
+    **Authorization:** Requires policies:publish permission
     """
-    user_id = user["user_id"]
+    user_id = user.user_id
 
     pdf_uri, jpeg_uri = await generation_service.generate_and_publish_policy(
         policy_id=policy_id,
@@ -341,17 +339,18 @@ async def publish_policy(
 async def download_policy(
     policy_id: UUID,
     format: str,
-    user: dict = Depends(require_auth),
+    user: UserRBAC = Depends(require_permission("policies:view")),
     generation_service: PolicyGenerationService = Depends(get_generation_service)
 ):
     """
     Get presigned download URL for policy artifact.
 
     **Authentication:** Required
+    **Authorization:** Requires policies:view permission
     **Path Parameters:**
     - format: 'pdf' or 'jpeg'
     """
-    user_id = user["user_id"]
+    user_id = user.user_id
     user_groups = get_user_groups(user)
 
     download_url = await generation_service.generate_download_url(
@@ -376,16 +375,16 @@ async def download_policy(
 async def grant_access(
     policy_id: UUID,
     request: GrantAccessRequest,
-    user: dict = Depends(require_auth),
+    user: UserRBAC = Depends(require_permission("policies:share")),
     policy_service: PolicyService = Depends(get_policy_service)
 ):
     """
     Grant Entra ID group access to policy.
 
     **Authentication:** Required
-    **Authorization:** Policy owner only
+    **Authorization:** Requires policies:share permission
     """
-    user_id = user["user_id"]
+    user_id = user.user_id
 
     access = await policy_service.grant_group_access(
         policy_id=policy_id,
@@ -410,16 +409,16 @@ async def grant_access(
 async def revoke_access(
     policy_id: UUID,
     group_name: str,
-    user: dict = Depends(require_auth),
+    user: UserRBAC = Depends(require_permission("policies:share")),
     policy_service: PolicyService = Depends(get_policy_service)
 ):
     """
     Revoke group access to policy.
 
     **Authentication:** Required
-    **Authorization:** Policy owner only
+    **Authorization:** Requires policies:share permission
     """
-    user_id = user["user_id"]
+    user_id = user.user_id
 
     result = await policy_service.revoke_group_access(
         policy_id=policy_id,
@@ -433,16 +432,16 @@ async def revoke_access(
 @router.get("/policies/{policy_id}/access")
 async def list_access_rules(
     policy_id: UUID,
-    user: dict = Depends(require_auth),
+    user: UserRBAC = Depends(require_permission("policies:view")),
     policy_service: PolicyService = Depends(get_policy_service)
 ):
     """
     Get access rules for policy.
 
     **Authentication:** Required
-    **Authorization:** Policy owner only
+    **Authorization:** Requires policies:view permission
     """
-    user_id = user["user_id"]
+    user_id = user.user_id
 
     access_list = await policy_service.get_policy_access_list(
         policy_id=policy_id,
@@ -472,16 +471,16 @@ async def list_access_rules(
 async def generate_questionnaire(
     policy_id: UUID,
     request: GenerateQuestionnaireRequest,
-    user: dict = Depends(require_auth),
+    user: UserRBAC = Depends(require_permission("policies:edit")),
     questionnaire_service: QuestionnaireService = Depends(get_questionnaire_service)
 ):
     """
     Generate questionnaire from policy content.
 
     **Authentication:** Required
-    **Authorization:** Policy owner only
+    **Authorization:** Requires policies:edit permission
     """
-    user_id = user["user_id"]
+    user_id = user.user_id
 
     questionnaire = await questionnaire_service.generate_questionnaire(
         policy_id=policy_id,
@@ -499,14 +498,15 @@ async def generate_questionnaire(
 @router.get("/policies/{policy_id}/questionnaire")
 async def get_questionnaire(
     policy_id: UUID,
-    user: dict = Depends(require_auth)
+    user: UserRBAC = Depends(require_permission("policies:view"))
 ):
     """
     Get questionnaire for policy.
 
     **Authentication:** Required
+    **Authorization:** Requires policies:view permission
     """
-    user_id = user["user_id"]
+    user_id = user.user_id
     container = get_container()
     repo = await container.init_policy_repository()
 
@@ -541,16 +541,16 @@ async def update_question(
     policy_id: UUID,
     question_id: UUID,
     request: UpdateCorrectAnswerRequest,
-    user: dict = Depends(require_auth),
+    user: UserRBAC = Depends(require_permission("policies:edit")),
     questionnaire_service: QuestionnaireService = Depends(get_questionnaire_service)
 ):
     """
     Update correct answer for a question (user validation).
 
     **Authentication:** Required
-    **Authorization:** Policy owner only
+    **Authorization:** Requires policies:edit permission
     """
-    user_id = user["user_id"]
+    user_id = user.user_id
 
     question = await questionnaire_service.update_correct_answer(
         question_id=question_id,

@@ -30,6 +30,7 @@ from src.application.api.group_mapping_routes import router as group_mapping_rou
 from src.application.api.document_routes import router as document_router
 from src.application.api.text_editor_routes import router as text_editor_router
 from src.application.api.policy_routes import router as policy_router
+from src.application.api.rbac_routes import router as rbac_router
 from src.application.di import get_container, close_container
 
 
@@ -119,6 +120,8 @@ app.include_router(document_router, prefix="/api/v1", tags=["documents"])
 app.include_router(text_editor_router, prefix="/api/v1", tags=["ai-editor"])
 # Policy creation and management routes
 app.include_router(policy_router, prefix="/api/v1", tags=["policies"])
+# RBAC (Role-Based Access Control) routes
+app.include_router(rbac_router, prefix="/api/v1", tags=["rbac"])
 
 
 @app.get("/")
@@ -176,7 +179,13 @@ async def health():
             "ai_editor_stream": "/api/v1/ai-editor/stream",
             "ai_editor_upload": "/api/v1/ai-editor/upload",
             "ai_editor_chat": "/api/v1/ai-editor/chat",
-            "ai_editor_documents": "/api/v1/ai-editor/documents"
+            "ai_editor_documents": "/api/v1/ai-editor/documents",
+
+            # RBAC (Role-Based Access Control)
+            "rbac_me": "/api/v1/rbac/me",
+            "rbac_roles": "/api/v1/rbac/roles",
+            "rbac_superadmins": "/api/v1/rbac/superadmins",
+            "rbac_group_mappings": "/api/v1/rbac/group-mappings"
         }
     }
 

@@ -13,7 +13,8 @@ from typing import Optional, List
 from fastapi import APIRouter, HTTPException, Depends, Request
 from pydantic import BaseModel, Field
 
-from src.middleware.teams_auth import require_auth
+from src.middleware.rbac import require_permission
+from src.domain.models.rbac_models import UserRBAC
 from src.application.di import get_container
 from src.services.storage_service import StorageService
 from src.services.document_processor import (
@@ -179,7 +180,7 @@ async def get_supported_types():
 @router.get("/documents/signed-url", response_model=SignedDownloadUrlResponse)
 async def get_signed_download_url(
     blob_path: str,
-    user: dict = Depends(require_auth),
+    user: UserRBAC = Depends(require_permission("documents:view")),
 ):
     """
     Generate a time-limited signed URL for downloading/viewing a document.
@@ -197,7 +198,7 @@ async def get_signed_download_url(
     opened directly in the browser.
     """
     try:
-        user_id = user["user_id"]
+        user_id = user.user_id
 
         logger.info(f"🔗 Generating signed download URL for user {user_id}: {blob_path}")
 
@@ -244,7 +245,7 @@ async def get_signed_download_url(
 @router.post("/documents/presigned-url", response_model=PresignedUrlResponse)
 async def generate_presigned_url(
     request_body: PresignedUrlRequest,
-    user: dict = Depends(require_auth),
+    user: UserRBAC = Depends(require_permission("documents:upload")),
 ):
     """
     Generate a presigned URL for uploading a document.
@@ -264,7 +265,7 @@ async def generate_presigned_url(
     ```
     """
     try:
-        user_id = user["user_id"]
+        user_id = user.user_id
 
         logger.info(f"📤 Generating presigned URL for {user_id}: {request_body.filename}")
 
@@ -304,7 +305,7 @@ async def generate_presigned_url(
 @router.post("/documents/confirm-upload", response_model=UploadConfirmResponse)
 async def confirm_upload(
     request_body: UploadConfirmRequest,
-    user: dict = Depends(require_auth),
+    user: UserRBAC = Depends(require_permission("documents:upload")),
 ):
     """
     Confirm that a document upload completed successfully.
@@ -342,7 +343,7 @@ async def confirm_upload(
 @router.post("/documents/process", response_model=ProcessDocumentsResponse)
 async def process_documents(
     request_body: ProcessDocumentsRequest,
-    user: dict = Depends(require_auth),
+    user: UserRBAC = Depends(require_permission("documents:view")),
 ):
     """
     Process uploaded documents with Gemini and the agent.
@@ -362,8 +363,8 @@ async def process_documents(
     text files, CSV, HTML, Markdown.
     """
     try:
-        user_id = user["user_id"]
-        user_name = user.get("name", "Unknown")
+        user_id = user.user_id
+        user_name = user.email or "Unknown"
 
         logger.info("=" * 60)
         logger.info("📄 DOCUMENT PROCESSING REQUEST")
@@ -454,7 +455,7 @@ async def process_documents(
 async def delete_document(
     document_id: str,
     blob_path: str,
-    user: dict = Depends(require_auth),
+    user: UserRBAC = Depends(require_permission("documents:delete")),
 ):
     """
     Delete an uploaded document.
@@ -464,7 +465,7 @@ async def delete_document(
     **Note:** Users can only delete their own documents.
     """
     try:
-        user_id = user["user_id"]
+        user_id = user.user_id
 
         # Verify the blob_path belongs to this user
         if f"uploads/{user_id}/" not in blob_path:
@@ -490,7 +491,7 @@ async def delete_document(
 
 @router.get("/documents/list")
 async def list_user_documents(
-    user: dict = Depends(require_auth),
+    user: UserRBAC = Depends(require_permission("documents:list")),
     max_results: int = 100,
 ):
     """
@@ -499,7 +500,7 @@ async def list_user_documents(
     **Authentication:** Requires valid Teams SSO token or OAuth2 JWT.
     """
     try:
-        user_id = user["user_id"]
+        user_id = user.user_id
 
         storage = get_storage_service()
         documents = storage.list_user_documents(user_id, max_results)

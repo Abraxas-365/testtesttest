@@ -11,6 +11,7 @@ from google.adk.sessions import DatabaseSessionService
 from src.domain.ports import AgentRepository, CorpusRepository, TextEditorRepository
 from src.domain.ports.group_mapping_repository import GroupMappingRepository
 from src.domain.ports.policy_repository import PolicyRepository
+from src.domain.ports.rbac_repository import RBACRepository
 from src.domain.services import AgentService
 from src.domain.services.policy_service import PolicyService
 from src.domain.services.policy_generation_service import PolicyGenerationService
@@ -23,6 +24,7 @@ from src.infrastructure.adapters.postgres import (
     PostgresTextEditorRepository,
 )
 from src.infrastructure.adapters.postgres.postgres_policy_repository import PostgresPolicyRepository
+from src.infrastructure.adapters.postgres.postgres_rbac_repository import PostgresRBACRepository
 from src.infrastructure.tools import ToolRegistry
 from src.services.storage_service import StorageService
 
@@ -55,6 +57,8 @@ class Container:
         # Streaming chat service
         self._streaming_chat_service: Optional[StreamingChatService] = None
         self._shared_db_pool: Optional[asyncpg.Pool] = None
+        # RBAC system
+        self._rbac_repository: Optional[RBACRepository] = None
 
     async def init_repository(self) -> AgentRepository:
         """
@@ -112,6 +116,22 @@ class Container:
             logger.info("✅ PostgresGroupMappingRepository initialized (shared pool)")
 
         return self._group_mapping_repository
+
+    async def init_rbac_repository(self) -> RBACRepository:
+        """
+        Initialize and return the RBAC repository.
+
+        Uses the shared database pool.
+
+        Returns:
+            RBACRepository instance
+        """
+        if self._rbac_repository is None:
+            pool = await self._get_shared_db_pool()
+            self._rbac_repository = PostgresRBACRepository(pool)
+            logger.info("✅ PostgresRBACRepository initialized (shared pool)")
+
+        return self._rbac_repository
 
     async def get_text_editor_repository(self) -> TextEditorRepository:
         """
